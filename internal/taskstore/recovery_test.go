@@ -8,6 +8,86 @@ import (
 	"testing"
 )
 
+func TestScopedTaskRecoveryOver500(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(canonicalTempDir(t), "tasks.db")
+	s := openTest(t, path)
+	r := root(t, s)
+	scope := Scope{"alice", r.ID}
+	for i := 0; i < 1001; i++ {
+		_, err := s.CreateChild(ctx, CreateRequest{Scope: scope, ParentID: r.ID, IdempotencyKey: fmt.Sprint(i), Goal: "child"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherReq := rootRequest()
+	otherReq.IdempotencyKey = "other"
+	other, err := s.CreateRoot(ctx, otherReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ListTasksForRecovery(ctx, scope, "", 500)
+	if err != nil || len(first.Tasks) != 500 || first.NextCursor == "" {
+		t.Fatal(first, err)
+	}
+	// Later inserts must not change the traversal watermark.
+	_, err = s.CreateChild(ctx, CreateRequest{Scope: scope, ParentID: r.ID, IdempotencyKey: "later", Goal: "later"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sc := range []Scope{{"bob", r.ID}, {"alice", other.ID}} {
+		_, err = s.ListTasksForRecovery(ctx, sc, first.NextCursor, 500)
+		kind(t, err, Invalid)
+	}
+	for _, bad := range []string{"!", "e30", first.NextCursor + "=", encodeTaskCursor(taskCursor{Version: 2, Scope: scope, After: 1, Through: 2000}), encodeTaskCursor(taskCursor{Version: 1, Scope: scope, After: 1, Through: 999999})} {
+		_, err = s.ListTasksForRecovery(ctx, scope, bad, 500)
+		kind(t, err, Invalid)
+	}
+	seen := map[string]bool{}
+	page := first
+	pages := 0
+	for {
+		pages++
+		for _, task := range page.Tasks {
+			if seen[task.ID] || task.CallerID != scope.CallerID || task.RootID != scope.RootID || task.Goal == "later" {
+				t.Fatal("duplicate or scope/watermark leak", task)
+			}
+			seen[task.ID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		s.Close()
+		s = openTest(t, path)
+		page, err = s.ListTasksForRecovery(ctx, scope, page.NextCursor, 500)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(seen) != 1002 || pages != 3 || !seen[r.ID] {
+		t.Fatal(len(seen), pages)
+	}
+	for _, limit := range []int{0, 501} {
+		_, err = s.ListTasksForRecovery(ctx, scope, "", limit)
+		kind(t, err, Invalid)
+	}
+	_, err = s.ListTasksForRecovery(ctx, Scope{}, "", 1)
+	kind(t, err, Invalid)
+	empty, err := s.ListTasksForRecovery(ctx, Scope{"bob", r.ID}, "", 1)
+	if err != nil || len(empty.Tasks) != 0 || empty.NextCursor != "" {
+		t.Fatal(empty, err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = s.ListTasksForRecovery(canceled, scope, "", 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	s.Close()
+	_, err = s.ListTasksForRecovery(ctx, scope, "", 1)
+	kind(t, err, Closed)
+}
+
 // seedRecovery intentionally returns no task IDs or creation requests.
 func seedRecovery(t *testing.T, path string) {
 	t.Helper()

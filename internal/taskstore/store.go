@@ -336,6 +336,59 @@ func (s *Store) List(ctx context.Context, scope Scope, limit int) ([]Task, error
 	}
 	return tasks, s.normalize(ctx, rows.Err())
 }
+
+// BindEnvironment is a trusted Controller operation, not an Agent-facing API.
+// It binds a backend-returned ID once, without changing task state or the original
+// creation request digest. Retrying the same ID is idempotent only while the
+// expected state still matches. On failure, the caller must first inspect the
+// persisted binding: only an environment confirmed as an unadopted candidate may
+// be cleaned up. A state conflict, cancellation, or unknown commit result must
+// not directly trigger deletion of a possibly adopted environment. This Store
+// does not manage runtime resources.
+func (s *Store) BindEnvironment(ctx context.Context, scope Scope, id string, expected State, environmentID string) (Task, error) {
+	if err := s.check(ctx); err != nil {
+		return Task{}, err
+	}
+	if !validScope(scope) || strings.TrimSpace(id) == "" || strings.TrimSpace(environmentID) == "" {
+		return Task{}, fault(Invalid, "caller, root, task and environment required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Task{}, s.normalize(ctx, err)
+	}
+	defer tx.Rollback()
+	t, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM tasks WHERE caller=? AND root_id=? AND id=?", scope.CallerID, scope.RootID, id))
+	if err != nil {
+		return Task{}, s.normalize(ctx, err)
+	}
+	if t.State != expected {
+		return Task{}, fault(Conflict, "state does not match expected")
+	}
+	if t.EnvironmentID != "" {
+		if t.EnvironmentID != environmentID {
+			return Task{}, fault(Conflict, "environment is already bound")
+		}
+		return t, nil
+	}
+	t.EnvironmentID = environmentID
+	t.UpdatedAt = time.Now().UTC()
+	result, err := tx.ExecContext(ctx, "UPDATE tasks SET environment_id=?,updated_at=? WHERE id=? AND caller=? AND root_id=? AND state=? AND environment_id=''", environmentID, t.UpdatedAt.UnixNano(), id, scope.CallerID, scope.RootID, expected)
+	if err != nil {
+		return Task{}, s.normalize(ctx, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return Task{}, err
+	}
+	if n != 1 {
+		return Task{}, fault(Conflict, "task changed")
+	}
+	if err = tx.Commit(); err != nil {
+		return Task{}, s.normalize(ctx, err)
+	}
+	return t, nil
+}
+
 func (s *Store) Transition(ctx context.Context, scope Scope, id string, expected, next State) (Task, error) {
 	if err := s.check(ctx); err != nil {
 		return Task{}, err
