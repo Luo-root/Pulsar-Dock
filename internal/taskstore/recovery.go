@@ -13,6 +13,93 @@ type RootPage struct {
 	NextCursor string
 }
 
+// TaskPage is a bounded caller/root-scoped page, including the root itself.
+type TaskPage struct {
+	Tasks      []Task
+	NextCursor string
+}
+
+type taskCursor struct {
+	Version        int
+	Scope          Scope
+	After, Through int64
+}
+
+func encodeTaskCursor(c taskCursor) string {
+	b, _ := json.Marshal(c)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// ListTasksForRecovery is for the trusted Controller only, never Agent input.
+// Pass NextCursor unchanged with the same trusted scope. Like root recovery,
+// insertion-order pages include every task present at the initial watermark once,
+// exclude later inserts, and survive reopening the same database. Metadata is
+// read per page, not frozen. Cursors are not authorization tokens. External DB
+// modification invalidates traversal guarantees. Before stopping a task tree the
+// Controller must separately block new delegation: this read does not freeze it.
+func (s *Store) ListTasksForRecovery(ctx context.Context, scope Scope, cursor string, limit int) (TaskPage, error) {
+	if err := s.check(ctx); err != nil {
+		return TaskPage{}, err
+	}
+	if !validScope(scope) || limit < 1 || limit > 500 || len(cursor) > 8192 {
+		return TaskPage{}, fault(Invalid, "scope and limit 1..500 required")
+	}
+	c := taskCursor{Version: 1, Scope: scope}
+	if cursor != "" {
+		data, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil || json.Unmarshal(data, &c) != nil || encodeTaskCursor(c) != cursor || c.Version != 1 || c.Scope != scope || c.After < 1 || c.Through <= c.After {
+			return TaskPage{}, fault(Invalid, "invalid task recovery cursor")
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskPage{}, s.normalize(ctx, err)
+	}
+	defer tx.Rollback()
+	if cursor == "" {
+		err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(rowid),0) FROM tasks WHERE caller=? AND root_id=?", scope.CallerID, scope.RootID).Scan(&c.Through)
+	} else {
+		var count int
+		err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE caller=? AND root_id=? AND rowid IN (?,?)", scope.CallerID, scope.RootID, c.After, c.Through).Scan(&count)
+		if err == nil && count != 2 {
+			return TaskPage{}, fault(Invalid, "task recovery cursor no longer valid")
+		}
+	}
+	if err != nil {
+		return TaskPage{}, s.normalize(ctx, err)
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT "+columns+" FROM tasks WHERE caller=? AND root_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?", scope.CallerID, scope.RootID, c.After, c.Through, limit+1)
+	if err != nil {
+		return TaskPage{}, s.normalize(ctx, err)
+	}
+	page := TaskPage{Tasks: []Task{}}
+	for rows.Next() {
+		t, e := scan(rows)
+		if e != nil {
+			rows.Close()
+			return TaskPage{}, s.normalize(ctx, e)
+		}
+		page.Tasks = append(page.Tasks, t)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return TaskPage{}, s.normalize(ctx, err)
+	}
+	if len(page.Tasks) > limit {
+		page.Tasks = page.Tasks[:limit]
+		err = tx.QueryRowContext(ctx, "SELECT rowid FROM tasks WHERE id=?", page.Tasks[limit-1].ID).Scan(&c.After)
+		if err != nil {
+			return TaskPage{}, s.normalize(ctx, err)
+		}
+		page.NextCursor = encodeTaskCursor(c)
+	}
+	if err = tx.Commit(); err != nil {
+		return TaskPage{}, s.normalize(ctx, err)
+	}
+	return page, nil
+}
+
 type rootCursor struct {
 	Version        int
 	Caller         string
