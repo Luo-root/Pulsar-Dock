@@ -61,11 +61,37 @@ type Environment struct {
 	Name    string
 	Backend string
 	State   string
+	Agent   string
+	CPUs    int
+	Memory  string
 }
 
 type ExecRequest struct {
 	Command []string
 	User    string
+}
+
+// CopyReceipt describes one regular file copied into the guest, not a host mount.
+// Digest is SHA-256 of the staged bytes.
+type CopyReceipt struct {
+	GuestPath string
+	Bytes     int64
+	Digest    string
+}
+
+// CopySelector selects a guest file with an explicit byte bound. Backends without
+// a verified transfer-time bound (including SbxBackend) must return unsupported.
+type CopySelector struct {
+	GuestPath string
+	MaxBytes  int64
+}
+
+// ArtifactSnapshot is a bounded in-memory snapshot, not an applied project artifact.
+// Callers own persistence, provenance, baseline checks, and explicit application.
+type ArtifactSnapshot struct {
+	GuestPath string
+	Bytes     []byte
+	Digest    string
 }
 
 type RuntimeBackend interface {
@@ -75,8 +101,11 @@ type RuntimeBackend interface {
 	Create(ctx context.Context, spec EnvironmentSpec) (Environment, error)
 	Start(ctx context.Context, environment Environment) error
 	Exec(ctx context.Context, environment Environment, request ExecRequest) (string, error)
+	CopyIn(ctx context.Context, environment Environment, sourcePath, guestPath string) (CopyReceipt, error)
+	CopyOut(ctx context.Context, environment Environment, selector CopySelector) (ArtifactSnapshot, error)
 	Stop(ctx context.Context, environment Environment) error
 	Remove(ctx context.Context, environment Environment) error
+	// SetNetworkPolicy replaces the environment's managed allow set; empty denies all.
 	SetNetworkPolicy(ctx context.Context, environment Environment, rules []NetworkRule) error
 	Revoke(ctx context.Context, environment Environment, grant string) error
 	Inspect(ctx context.Context, environment Environment) (Environment, error)
