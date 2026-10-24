@@ -35,7 +35,13 @@ func policy() Policy {
 }
 func setup(t *testing.T) (*Service, *taskstore.Store, *fakeBackend, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "tasks.db")
+	// Resolve only testing's trusted directory (macOS may use /var -> /private/var).
+	// Production database inputs must retain taskstore's ancestor-link rejection.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "tasks.db")
 	store, err := taskstore.Open(path)
 	if err != nil {
 		t.Fatal(err)
