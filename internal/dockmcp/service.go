@@ -110,6 +110,9 @@ func (s *Service) createChild(ctx context.Context, req *mcp.CallToolRequest, inp
 	if err != nil {
 		return nil, ChildTaskOutput{}, err
 	}
+	if s.persistent != nil {
+		return s.runPersistentCreate(ctx, identity, input)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	grant, err := s.authorizeLocked(identity, ActionCreateChild, "")
@@ -118,9 +121,6 @@ func (s *Service) createChild(ctx context.Context, req *mcp.CallToolRequest, inp
 	}
 	if input.Goal == "" {
 		return nil, ChildTaskOutput{}, fmt.Errorf("goal is required")
-	}
-	if s.persistent != nil {
-		return s.createPersistentChild(ctx, grant, input)
 	}
 	key := childRequestKey{grant.CallerID, grant.RootTaskID, grant.EnvironmentID, input.IdempotencyKey}
 	if input.IdempotencyKey != "" {
@@ -152,14 +152,14 @@ func (s *Service) status(ctx context.Context, req *mcp.CallToolRequest, input St
 	if err != nil {
 		return nil, StatusOutput{}, err
 	}
+	if s.persistent != nil {
+		return s.runPersistentStatus(ctx, identity, input)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	grant, err := s.authorizeLocked(identity, ActionStatus, input.TaskID)
+	_, err = s.authorizeLocked(identity, ActionStatus, input.TaskID)
 	if err != nil {
 		return nil, StatusOutput{}, err
-	}
-	if s.persistent != nil {
-		return s.persistentStatus(ctx, grant, input.TaskID)
 	}
 	task, ok := s.tasks[input.TaskID]
 	if !ok {
@@ -173,17 +173,14 @@ func (s *Service) publish(ctx context.Context, req *mcp.CallToolRequest, input P
 	if err != nil {
 		return nil, PublishOutput{}, err
 	}
+	if s.persistent != nil {
+		return s.runPersistentPublish(ctx, identity)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	grant, err := s.authorizeLocked(identity, ActionPublish, input.TaskID)
+	_, err = s.authorizeLocked(identity, ActionPublish, input.TaskID)
 	if err != nil {
 		return nil, PublishOutput{}, err
-	}
-	if s.persistent != nil {
-		if _, err := s.persistentRoot(ctx, grant); err != nil {
-			return nil, PublishOutput{}, err
-		}
-		return nil, PublishOutput{}, ErrArtifactUnsupported
 	}
 	if input.TaskID == "" || input.Kind == "" || input.Digest == "" {
 		return nil, PublishOutput{}, fmt.Errorf("task_id, kind, and digest are required")

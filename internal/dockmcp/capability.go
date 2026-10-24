@@ -69,12 +69,15 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	grant.Actions = append([]string(nil), grant.Actions...)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.persistent != nil {
 		if _, err := s.persistentRoot(context.Background(), grant); err != nil {
 			return "", ErrUnauthorized
 		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.persistent != nil && s.persistent.revokedRoots[taskstore.Scope{CallerID: grant.CallerID, RootID: grant.RootTaskID}] {
+		return "", ErrUnauthorized
 	}
 	s.capabilities = append(s.capabilities, capability{grant: grant, tokenHash: sha256.Sum256([]byte(token)), generation: s.generation})
 	if s.persistent == nil {
@@ -97,7 +100,13 @@ func (s *Service) RevokeCapability(token string) {
 			s.capabilities[i].revoked = true
 			root := s.capabilities[i].grant.RootTaskID
 			if s.persistent != nil {
-				s.persistent.revokedRoots[taskstore.Scope{CallerID: s.capabilities[i].grant.CallerID, RootID: root}] = true
+				scope := taskstore.Scope{CallerID: s.capabilities[i].grant.CallerID, RootID: root}
+				s.persistent.revokedRoots[scope] = true
+				for op := range s.persistent.operations {
+					if op.scope == scope {
+						op.cancel()
+					}
+				}
 			}
 			if task, ok := s.tasks[root]; ok {
 				task.Revoked = true
@@ -111,6 +120,11 @@ func (s *Service) RevokeCapability(token string) {
 func (s *Service) RotateGeneration() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.persistent != nil {
+		for op := range s.persistent.operations {
+			op.cancel()
+		}
+	}
 	s.generation++
 	// Drop old hashes as well, including at uint64 wraparound.
 	s.capabilities = nil
@@ -127,8 +141,8 @@ func (s *Service) authenticate(ctx context.Context, req *mcp.CallToolRequest) (R
 	return identity, nil
 }
 
-// authorizeLocked and each operation share the same lock as revocation, so a
-// revocation completed before an operation always prevents that operation.
+// authorizeLocked serializes capability checks with revocation. Persistent I/O
+// runs outside this lock under a cancellable lease and is rechecked at completion.
 func (s *Service) authorizeLocked(identity RequestIdentity, action, taskID string) (CapabilityGrant, error) {
 	hash := sha256.Sum256([]byte(identity.Token))
 	var found *capability

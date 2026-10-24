@@ -27,6 +27,7 @@ type persistentTasks struct {
 	controller   ChildController
 	store        TaskReader
 	revokedRoots map[taskstore.Scope]bool
+	operations   map[*operationLease]struct{}
 }
 
 // NewPersistentService uses only the Controller/taskstore as task facts. The
@@ -45,12 +46,15 @@ func NewPersistentService(auth RequestAuthenticator, callerID string, ctl ChildC
 		}
 		return id, nil
 	}
-	return &Service{authenticator: bound, persistent: &persistentTasks{caller: callerID, controller: ctl, store: store, revokedRoots: make(map[taskstore.Scope]bool)}}, nil
+	return &Service{authenticator: bound, persistent: &persistentTasks{caller: callerID, controller: ctl, store: store, revokedRoots: make(map[taskstore.Scope]bool), operations: make(map[*operationLease]struct{})}}, nil
 }
 
 func (s *Service) persistentRoot(ctx context.Context, grant CapabilityGrant) (taskstore.Task, error) {
 	scope := taskstore.Scope{CallerID: grant.CallerID, RootID: grant.RootTaskID}
-	if grant.CallerID != s.persistent.caller || s.persistent.revokedRoots[scope] {
+	s.mu.Lock()
+	revoked := s.persistent.revokedRoots[scope]
+	s.mu.Unlock()
+	if grant.CallerID != s.persistent.caller || revoked {
 		return taskstore.Task{}, ErrUnauthorized
 	}
 	root, err := s.persistent.store.Get(ctx, scope, grant.RootTaskID)
@@ -67,9 +71,6 @@ func (s *Service) persistentRoot(ctx context.Context, grant CapabilityGrant) (ta
 }
 
 func (s *Service) createPersistentChild(ctx context.Context, grant CapabilityGrant, input ChildTaskInput) (*mcp.CallToolResult, ChildTaskOutput, error) {
-	if _, err := s.persistentRoot(ctx, grant); err != nil {
-		return nil, ChildTaskOutput{}, err
-	}
 	if strings.TrimSpace(input.IdempotencyKey) == "" {
 		return nil, ChildTaskOutput{}, errors.New("idempotency_key required")
 	}
