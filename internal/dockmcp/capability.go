@@ -76,7 +76,9 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	return token, nil
 }
 
-// RevokeCapability is idempotent and does not reveal whether a token existed.
+// RevokeCapability revokes the matching token and its root task's entire subtree,
+// including independently issued descendant capabilities. It is idempotent and
+// does not reveal whether a token existed. Other task trees remain unaffected.
 func (s *Service) RevokeCapability(token string) {
 	hash := sha256.Sum256([]byte(token))
 	s.mu.Lock()
@@ -84,6 +86,11 @@ func (s *Service) RevokeCapability(token string) {
 	for i := range s.capabilities {
 		if subtle.ConstantTimeCompare(hash[:], s.capabilities[i].tokenHash[:]) == 1 {
 			s.capabilities[i].revoked = true
+			root := s.capabilities[i].grant.RootTaskID
+			if task, ok := s.tasks[root]; ok {
+				task.Revoked = true
+				s.tasks[root] = task
+			}
 		}
 	}
 }
@@ -121,6 +128,9 @@ func (s *Service) authorizeLocked(identity RequestIdentity, action, taskID strin
 	if found == nil || found.revoked || found.generation != s.generation || !time.Now().Before(found.grant.ExpiresAt) || found.grant.CallerID != identity.CallerID || found.grant.EnvironmentID != identity.EnvironmentID {
 		return CapabilityGrant{}, ErrUnauthorized
 	}
+	if !s.taskActiveLocked(found.grant.RootTaskID) || (taskID != "" && !s.taskActiveLocked(taskID)) {
+		return CapabilityGrant{}, ErrUnauthorized
+	}
 	allowed := false
 	for _, candidate := range found.grant.Actions {
 		allowed = allowed || candidate == action
@@ -132,6 +142,25 @@ func (s *Service) authorizeLocked(identity RequestIdentity, action, taskID strin
 		return CapabilityGrant{}, ErrUnauthorized
 	}
 	return found.grant, nil
+}
+
+// taskActiveLocked checks the complete ancestry, not just the capability root.
+// Missing records and cycles fail closed. Rotation never clears task revocation.
+func (s *Service) taskActiveLocked(taskID string) bool {
+	if taskID == "" {
+		return false
+	}
+	for n := 0; n < len(s.tasks); n++ {
+		task, ok := s.tasks[taskID]
+		if !ok || task.Revoked {
+			return false
+		}
+		if task.ParentID == "" {
+			return true
+		}
+		taskID = task.ParentID
+	}
+	return false
 }
 
 func (s *Service) inScopeLocked(taskID, root string) bool {

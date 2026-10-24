@@ -49,6 +49,7 @@ type taskRecord struct {
 	Goal      string
 	State     string
 	CreatedAt time.Time
+	Revoked   bool // Protected by Service.mu; permanently denies this task and its subtree.
 }
 
 type Service struct {
