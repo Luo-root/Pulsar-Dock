@@ -88,6 +88,9 @@ func (s *Service) runPersistentStatus(ctx context.Context, id RequestIdentity, i
 	}
 	_, out, err := s.persistentStatus(opctx, grant, input.TaskID)
 	if err == nil {
+		_, err = s.persistentRoot(opctx, grant)
+	}
+	if err == nil {
 		err = opctx.Err()
 	}
 	err = s.finishOperation(opctx, id, ActionStatus, op, err)

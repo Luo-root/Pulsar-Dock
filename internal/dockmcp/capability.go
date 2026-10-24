@@ -91,10 +91,12 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 // RevokeCapability revokes the matching token and its root task's entire subtree,
 // including independently issued descendant capabilities. It is idempotent and
 // does not reveal whether a token existed. Other task trees remain unaffected.
-func (s *Service) RevokeCapability(token string) {
+// In persistent mode a nil result acknowledges durable revocation. On storage
+// failure local denial remains active, but the host must retry before restart.
+func (s *Service) RevokeCapability(token string) error {
 	hash := sha256.Sum256([]byte(token))
+	var scopes []taskstore.Scope
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for i := range s.capabilities {
 		if subtle.ConstantTimeCompare(hash[:], s.capabilities[i].tokenHash[:]) == 1 {
 			s.capabilities[i].revoked = true
@@ -102,6 +104,7 @@ func (s *Service) RevokeCapability(token string) {
 			if s.persistent != nil {
 				scope := taskstore.Scope{CallerID: s.capabilities[i].grant.CallerID, RootID: root}
 				s.persistent.revokedRoots[scope] = true
+				scopes = append(scopes, scope)
 				for op := range s.persistent.operations {
 					if op.scope == scope {
 						op.cancel()
@@ -114,6 +117,17 @@ func (s *Service) RevokeCapability(token string) {
 			}
 		}
 	}
+	s.mu.Unlock()
+	if len(scopes) != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, scope := range scopes {
+			if err := s.persistent.store.RevokeRoot(ctx, scope); err != nil {
+				return errors.New("MCP durable revocation failed; retry required before restart")
+			}
+		}
+	}
+	return nil
 }
 
 // RotateGeneration invalidates every previously issued capability atomically.

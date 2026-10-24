@@ -158,8 +158,8 @@ func (s *Store) initialize() error {
 	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
 		return err
 	}
-	if v > 1 {
-		return fault(Invalid, "database schema is newer than supported version 1")
+	if v > 2 {
+		return fault(Invalid, "database schema is newer than supported version 2")
 	}
 	if v == 0 {
 		_, err = tx.ExecContext(ctx, `CREATE TABLE tasks (
@@ -171,6 +171,13 @@ func (s *Store) initialize() error {
  CREATE INDEX tasks_scope ON tasks(caller,root_id,id);
  PRAGMA user_version=1;`)
 		if err != nil {
+			return err
+		}
+	}
+	if v < 2 {
+		if _, err = tx.ExecContext(ctx, `CREATE TABLE root_revocations (
+ root_id TEXT PRIMARY KEY REFERENCES tasks(id), caller TEXT NOT NULL);
+ PRAGMA user_version=2;`); err != nil {
 			return err
 		}
 	}

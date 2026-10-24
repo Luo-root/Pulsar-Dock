@@ -20,6 +20,8 @@ type ChildController interface {
 
 type TaskReader interface {
 	Get(context.Context, taskstore.Scope, string) (taskstore.Task, error)
+	RootRevoked(context.Context, taskstore.Scope) (bool, error)
+	RevokeRoot(context.Context, taskstore.Scope) error
 }
 
 type persistentTasks struct {
@@ -55,6 +57,10 @@ func (s *Service) persistentRoot(ctx context.Context, grant CapabilityGrant) (ta
 	revoked := s.persistent.revokedRoots[scope]
 	s.mu.Unlock()
 	if grant.CallerID != s.persistent.caller || revoked {
+		return taskstore.Task{}, ErrUnauthorized
+	}
+	denied, err := s.persistent.store.RootRevoked(ctx, scope)
+	if err != nil || denied {
 		return taskstore.Task{}, ErrUnauthorized
 	}
 	root, err := s.persistent.store.Get(ctx, scope, grant.RootTaskID)

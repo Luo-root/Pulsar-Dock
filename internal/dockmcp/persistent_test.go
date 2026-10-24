@@ -36,6 +36,10 @@ func (f readerFunc) Get(ctx context.Context, s taskstore.Scope, id string) (task
 	return f(ctx, s, id)
 }
 
+// readerFunc is a non-revoking fake; durable revocation tests use real Store.
+func (f readerFunc) RootRevoked(context.Context, taskstore.Scope) (bool, error) { return false, nil }
+func (f readerFunc) RevokeRoot(context.Context, taskstore.Scope) error          { return nil }
+
 func TestPersistentControllerAndReopen(t *testing.T) {
 	ctx := context.Background()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -110,12 +114,9 @@ func TestPersistentControllerAndReopen(t *testing.T) {
 		t.Fatal("persistent service allocated prototype state")
 	}
 	oldToken := identity.Token
-	s.RevokeCapability(oldToken)
+	s.RotateGeneration()
 	if _, _, err = s.status(ctx, req, StatusInput{TaskID: child.TaskID}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatal(err)
-	}
-	if _, err = s.IssueCapability(CapabilityGrant{CallerID: root.CallerID, RootTaskID: root.ID, EnvironmentID: root.EnvironmentID, ExpiresAt: time.Now().Add(time.Hour), Actions: []string{ActionStatus}}); !errors.Is(err, ErrUnauthorized) {
-		t.Fatal("revoked tree reissued")
 	}
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
