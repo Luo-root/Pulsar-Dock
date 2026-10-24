@@ -31,7 +31,7 @@ func (b *fakeBackend) Remove(_ context.Context, env runtime.Environment) error {
 	return b.removeErr
 }
 func policy() Policy {
-	return Policy{Agent: "shell", TemplateRef: runtime.SbxTemplate, CPUs: 2, Memory: "1GiB", GatewayURL: "http://gateway.test:7777", ExpiresAfter: 300}
+	return Policy{Agent: "shell", TemplateRef: runtime.SbxTemplate, CPUs: 2, Memory: "1g"}
 }
 func setup(t *testing.T) (*Service, *taskstore.Store, *fakeBackend, string) {
 	t.Helper()
@@ -87,7 +87,7 @@ func TestCreatePolicyIdempotencyAndRecovery(t *testing.T) {
 		t.Fatal(child)
 	}
 	for _, spec := range b.specs {
-		if spec.Workspace != runtime.WorkspaceNone || spec.Skills != runtime.SkillsOff || spec.TemplateRef != runtime.SbxTemplate || spec.CPUs != 2 || spec.Memory != "1GiB" || spec.ExpiresAfter != 300 || spec.GatewayURL != policy().GatewayURL || len(spec.NetworkRules) != 1 || spec.NetworkRules[0] != (runtime.NetworkRule{Host: "gateway.test", Port: 7777, Action: "allow"}) {
+		if spec.Workspace != runtime.WorkspaceNone || spec.Skills != runtime.SkillsOff || spec.TemplateRef != runtime.SbxTemplate || spec.CPUs != 2 || spec.Memory != "1g" || spec.ExpiresAfter != 0 || spec.GatewayURL != "" || len(spec.NetworkRules) != 0 {
 			t.Fatalf("policy changed: %+v", spec)
 		}
 	}

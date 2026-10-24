@@ -6,9 +6,7 @@ package controller
 import (
 	"context"
 	"errors"
-	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +19,8 @@ var ErrRecoveryRequired = errors.New("controller recovery required")
 var ErrStopUnsupported = errors.New("controller stop is not implemented: no revocation or tree cleanup")
 
 // Policy is supplied only by trusted configuration, never by task input.
-// Network access is limited to the single configured gateway host and port.
+// Gateway and TTL are currently unsupported and must be empty/zero. Creation
+// denies all network access; no authenticated gateway or expiry is provided.
 type Policy struct {
 	Agent, TemplateRef, Memory, GatewayURL string
 	CPUs                                   int
@@ -53,24 +52,13 @@ func New(store *taskstore.Store, backend runtime.RuntimeBackend, caller string, 
 	if store == nil || backend == nil || strings.TrimSpace(caller) == "" {
 		return nil, errors.New("store, backend and trusted caller required")
 	}
-	u, err := url.Parse(policy.GatewayURL)
-	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, errors.New("fixed HTTP(S) gateway origin required")
+	if policy.GatewayURL != "" || policy.ExpiresAfter != 0 {
+		return nil, errors.New("gateway and TTL are unsupported; must be empty and zero")
 	}
-	port := 80
-	if u.Scheme == "https" {
-		port = 443
-	}
-	if u.Port() != "" {
-		port, err = strconv.Atoi(u.Port())
-		if err != nil || port < 1 || port > 65535 {
-			return nil, errors.New("invalid gateway port")
-		}
-	}
-	if strings.TrimSpace(policy.Agent) == "" || !regexp.MustCompile(`^.+@sha256:[0-9a-fA-F]{64}$`).MatchString(policy.TemplateRef) || strings.TrimSpace(policy.Memory) == "" || policy.CPUs < 1 || policy.ExpiresAfter < 1 {
+	if strings.TrimSpace(policy.Agent) == "" || !regexp.MustCompile(`^.+@sha256:[0-9a-fA-F]{64}$`).MatchString(policy.TemplateRef) || strings.TrimSpace(policy.Memory) == "" || policy.CPUs < 1 {
 		return nil, errors.New("fixed agent, digest-pinned template and positive resource limits required")
 	}
-	return &Service{store: store, backend: backend, caller: caller, spec: runtime.EnvironmentSpec{Agent: policy.Agent, TemplateRef: policy.TemplateRef, CPUs: policy.CPUs, Memory: policy.Memory, GatewayURL: policy.GatewayURL, ExpiresAfter: policy.ExpiresAfter, Workspace: runtime.WorkspaceNone, Skills: runtime.SkillsOff, NetworkRules: []runtime.NetworkRule{{Host: u.Hostname(), Port: port, Action: "allow"}}}}, nil
+	return &Service{store: store, backend: backend, caller: caller, spec: runtime.EnvironmentSpec{Agent: policy.Agent, TemplateRef: policy.TemplateRef, CPUs: policy.CPUs, Memory: policy.Memory, Workspace: runtime.WorkspaceNone, Skills: runtime.SkillsOff}}, nil
 }
 
 func (s *Service) CreateRoot(ctx context.Context, r Request) (taskstore.Task, error) {
@@ -113,8 +101,8 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 			if err != nil {
 				return taskstore.Task{}, err
 			}
-			if p.ParentID != "" || (p.State != taskstore.Preparing && p.State != taskstore.Running) {
-				return taskstore.Task{}, errors.New("parent must be an owned preparing or running root")
+			if p.ParentID != "" {
+				return taskstore.Task{}, errors.New("parent must be an owned root")
 			}
 			page, err := s.store.ListTasksForRecovery(ctx, scope, cursor, 500)
 			if err != nil {
@@ -146,6 +134,20 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 			return t, ErrRecoveryRequired
 		}
 		return t, nil
+	}
+	if parent != "" {
+		// Store resolves idempotency before checking parent state. Only a newly
+		// inserted child needs the stricter Controller admission check.
+		p, readErr := s.store.Get(ctx, scope, parent)
+		if readErr != nil || (p.State != taskstore.Preparing && p.State != taskstore.Running) {
+			repair, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			failed, failErr := s.store.Transition(repair, scope, t.ID, taskstore.Created, taskstore.Failed)
+			if failErr == nil {
+				t = failed
+			}
+			return t, errors.Join(errors.New("parent must be preparing or running for new delegation"), readErr, failErr)
+		}
 	}
 	spec := s.spec
 	spec.TaskID = t.ID

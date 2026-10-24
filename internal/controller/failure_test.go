@@ -44,10 +44,10 @@ func TestPolicyCannotBeMutatedByConfigOrBackend(t *testing.T) {
 	p.CPUs = 999
 	p.GatewayURL = "http://attacker.test"
 	b.create = func(spec runtime.EnvironmentSpec) (runtime.Environment, error) {
-		if spec.CPUs != 2 || spec.NetworkRules[0].Host != "gateway.test" || spec.GatewayURL != policy().GatewayURL {
+		if spec.CPUs != 2 || len(spec.NetworkRules) != 0 || spec.GatewayURL != "" || spec.ExpiresAfter != 0 {
 			t.Fatalf("mutated policy: %+v", spec)
 		}
-		spec.NetworkRules[0].Host = "attacker.test"
+		spec.NetworkRules = append(spec.NetworkRules, runtime.NetworkRule{Host: "attacker.test", Port: 80, Action: "allow"})
 		return runtime.Environment{ID: "real-" + spec.TaskID}, nil
 	}
 	for _, key := range []string{"one", "two"} {
