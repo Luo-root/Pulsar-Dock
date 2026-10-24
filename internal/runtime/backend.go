@@ -40,13 +40,13 @@ type NetworkRule struct {
 }
 
 type CapabilitySet struct {
-	MicroVM          bool
-	NetworkPolicy    bool
-	WorkspaceModes   []WorkspaceMode
-	ProcessTreeStop  bool
-	CredentialProxy  bool
-	PortPublish      bool
-	GuestExec        bool
+	MicroVM         bool
+	NetworkPolicy   bool
+	WorkspaceModes  []WorkspaceMode
+	ProcessTreeStop bool
+	CredentialProxy bool
+	PortPublish     bool
+	GuestExec       bool
 }
 
 type Diagnostics struct {
