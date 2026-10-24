@@ -53,6 +53,7 @@ type taskRecord struct {
 }
 
 type Service struct {
+	persistent    *persistentTasks
 	mu            sync.Mutex
 	sequence      uint64
 	tasks         map[string]taskRecord
@@ -93,9 +94,13 @@ func (s *Service) CreateServer() *mcp.Server {
 		Name:        "task.status",
 		Description: "Read the state of a task visible to the current Agent environment.",
 	}, s.status)
+	artifactDescription := "Record an artifact reference in memory for an existing task. This prototype does not persist artifact files or implement an ArtifactStore, and never applies changes to the host project."
+	if s.persistent != nil {
+		artifactDescription = "Unsupported: persistent ArtifactStore is unavailable. No artifact is published or applied to the host project."
+	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "artifact.publish",
-		Description: "Record an artifact reference in memory for an existing task. This prototype does not persist artifact files or implement an ArtifactStore, and never applies changes to the host project.",
+		Description: artifactDescription,
 	}, s.publish)
 	return server
 }
@@ -104,6 +109,9 @@ func (s *Service) createChild(ctx context.Context, req *mcp.CallToolRequest, inp
 	identity, err := s.authenticate(ctx, req)
 	if err != nil {
 		return nil, ChildTaskOutput{}, err
+	}
+	if s.persistent != nil {
+		return s.runPersistentCreate(ctx, identity, input)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -144,9 +152,13 @@ func (s *Service) status(ctx context.Context, req *mcp.CallToolRequest, input St
 	if err != nil {
 		return nil, StatusOutput{}, err
 	}
+	if s.persistent != nil {
+		return s.runPersistentStatus(ctx, identity, input)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.authorizeLocked(identity, ActionStatus, input.TaskID); err != nil {
+	_, err = s.authorizeLocked(identity, ActionStatus, input.TaskID)
+	if err != nil {
 		return nil, StatusOutput{}, err
 	}
 	task, ok := s.tasks[input.TaskID]
@@ -161,9 +173,13 @@ func (s *Service) publish(ctx context.Context, req *mcp.CallToolRequest, input P
 	if err != nil {
 		return nil, PublishOutput{}, err
 	}
+	if s.persistent != nil {
+		return s.runPersistentPublish(ctx, identity)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.authorizeLocked(identity, ActionPublish, input.TaskID); err != nil {
+	_, err = s.authorizeLocked(identity, ActionPublish, input.TaskID)
+	if err != nil {
 		return nil, PublishOutput{}, err
 	}
 	if input.TaskID == "" || input.Kind == "" || input.Digest == "" {
