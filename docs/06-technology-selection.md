@@ -39,7 +39,9 @@ Dock 的 Controller 只依赖 `RuntimeBackend`，不直接调用 sbx、Docker、
 
 未来的 `LocalBackend` 只能在通过同一组文件/进程/网络/凭据/生命周期反例后接入；没有安全证据时只允许受信任务，不能在安全模式下自动替代 `SbxBackend`。
 
-当前首个真实 Agent 路径已通过：Claude guest → Magpie 模型入口 → sbx MCP gateway → Dock stdio gateway。下一步实现 Controller/SQLite 任务记录和 SbxBackend 的 `Create/Start/Exec/CopyOut/Stop/Remove`，把目前内存态工具结果接到真实子环境与成果快照。
+历史首条探针路径为 Claude guest → Magpie 模型入口 → sbx MCP gateway → Dock stdio gateway，当时仅创建内存任务记录，未创建子环境。当前主线已经合并 SbxBackend、SQLite 任务存储、环境绑定、可信 Controller 创建和进程内 MCP capability 校验；默认命令入口缺少可信 authenticator，会拒绝业务调用，不能直接重放历史探针并预期成功。
+
+尚待完成：持久 MCP/Controller 接缝（PR #25 待审）、真实受控通道、Agent 启动、快照交接及停止回收。Start、CopyOut、Controller StopTask 当前明确 unsupported；GatewayURL/TTL 尚无可用实现，不得把协议接缝或 Go-core CI 当成真实多 Agent/桌面包验收。
 
 只读命令实际返回：
 
