@@ -10,6 +10,18 @@ import (
 	"testing"
 )
 
+// canonicalTempDir resolves only the trusted directory created by testing.
+// macOS commonly spells its temporary path via the OS-managed /var symlink.
+// Do not canonicalize arbitrary database inputs: Open must still reject links.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func openTest(t *testing.T, path string) *Store {
 	t.Helper()
 	s, e := Open(path)
@@ -39,7 +51,7 @@ func root(t *testing.T, s *Store) Task {
 }
 func TestPersistenceScopeAndRelations(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "空 格#question?.db")
+	path := filepath.Join(canonicalTempDir(t), "空 格#question?.db")
 	// '?' is not a legal Windows filename. '#' and Unicode still exercise URI escaping there.
 	if os.PathSeparator == '\\' {
 		path = filepath.Join(filepath.Dir(path), "空 格#question.db")
@@ -109,7 +121,7 @@ func TestPersistenceScopeAndRelations(t *testing.T) {
 func TestConcurrentIdempotency(t *testing.T) {
 	for _, two := range []bool{false, true} {
 		t.Run(map[bool]string{false: "one-store", true: "two-stores"}[two], func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "tasks.db")
+			path := filepath.Join(canonicalTempDir(t), "tasks.db")
 			a := openTest(t, path)
 			b := a
 			if two {
@@ -183,7 +195,7 @@ func TestConcurrentIdempotency(t *testing.T) {
 }
 func TestTransitionsAndTerminalParent(t *testing.T) {
 	ctx := context.Background()
-	s := openTest(t, filepath.Join(t.TempDir(), "tasks.db"))
+	s := openTest(t, filepath.Join(canonicalTempDir(t), "tasks.db"))
 	r := root(t, s)
 	scope := Scope{"alice", r.ID}
 	_, e := s.Transition(ctx, scope, r.ID, Created, Succeeded)
@@ -209,7 +221,7 @@ func TestTransitionsAndTerminalParent(t *testing.T) {
 	}
 }
 func TestCancelCloseAndRollback(t *testing.T) {
-	s := openTest(t, filepath.Join(t.TempDir(), "tasks.db"))
+	s := openTest(t, filepath.Join(canonicalTempDir(t), "tasks.db"))
 	r := root(t, s)
 	scope := Scope{"alice", r.ID}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -261,7 +273,7 @@ func TestCancelCloseAndRollback(t *testing.T) {
 	kind(t, e, Closed)
 }
 func TestPathsAndFutureSchema(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	for _, path := range []string{"", ":memory:", "file:anything?mode=memory", "https://example/db", `\\server\share\db`, "//server/db", dir} {
 		_, e := Open(path)
 		kind(t, e, Invalid)
@@ -275,6 +287,17 @@ func TestPathsAndFutureSchema(t *testing.T) {
 	} else {
 		_, e = Open(link)
 		kind(t, e, Invalid)
+	}
+	// A deliberate linked ancestor remains invalid even for a nonexistent DB.
+	linkedDir := filepath.Join(dir, "linked-directory")
+	if err := os.Symlink(dir, linkedDir); err != nil {
+		t.Log("directory symlink creation unavailable:", err)
+	} else {
+		_, err = Open(filepath.Join(linkedDir, "must-not-create.db"))
+		kind(t, err, Invalid)
+		if _, err = os.Lstat(filepath.Join(dir, "must-not-create.db")); !os.IsNotExist(err) {
+			t.Fatalf("linked ancestor rejection created database: %v", err)
+		}
 	}
 	future := filepath.Join(dir, "future.db")
 	db, e := sql.Open("sqlite", future)

@@ -29,7 +29,7 @@ func seedRecovery(t *testing.T, path string) {
 }
 
 func TestColdRecoveryDiscovery(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "recovery.db")
+	path := filepath.Join(canonicalTempDir(t), "recovery.db")
 	seedRecovery(t, path)
 	s := openTest(t, path)
 	ctx := context.Background()
@@ -108,7 +108,7 @@ func TestColdRecoveryDiscovery(t *testing.T) {
 }
 
 func TestRecoveryCursorBoundariesAndConcurrency(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "recovery.db")
+	path := filepath.Join(canonicalTempDir(t), "recovery.db")
 	seedRecovery(t, path)
 	s := openTest(t, path)
 	other := openTest(t, path)

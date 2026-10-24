@@ -9,7 +9,7 @@ import (
 )
 
 func TestCASAcrossStores(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cas.db")
+	path := filepath.Join(canonicalTempDir(t), "cas.db")
 	a := openTest(t, path)
 	b := openTest(t, path)
 	r := root(t, a)
@@ -40,7 +40,7 @@ func TestCASAcrossStores(t *testing.T) {
 }
 
 func TestTerminalReplayAndInvalidRequests(t *testing.T) {
-	s := openTest(t, filepath.Join(t.TempDir(), "contract.db"))
+	s := openTest(t, filepath.Join(canonicalTempDir(t), "contract.db"))
 	ctx := context.Background()
 	r := root(t, s)
 	scope := Scope{"alice", r.ID}
@@ -73,6 +73,6 @@ func TestTerminalReplayAndInvalidRequests(t *testing.T) {
 	kind(t, e, Invalid)
 	_, e = s.List(ctx, scope, 0)
 	kind(t, e, Invalid)
-	_, e = Open(filepath.Join(t.TempDir(), "missing-parent", "db"))
+	_, e = Open(filepath.Join(canonicalTempDir(t), "missing-parent", "db"))
 	kind(t, e, Invalid)
 }
