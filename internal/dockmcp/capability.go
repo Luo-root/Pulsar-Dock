@@ -79,7 +79,11 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	if s.persistent != nil && s.persistent.revokedRoots[taskstore.Scope{CallerID: grant.CallerID, RootID: grant.RootTaskID}] {
 		return "", ErrUnauthorized
 	}
-	s.capabilities = append(s.capabilities, capability{grant: grant, tokenHash: sha256.Sum256([]byte(token)), generation: s.generation})
+	hash := sha256.Sum256([]byte(token))
+	if s.persistent != nil {
+		s.persistent.issuedScopes[hash] = taskstore.Scope{CallerID: grant.CallerID, RootID: grant.RootTaskID}
+	}
+	s.capabilities = append(s.capabilities, capability{grant: grant, tokenHash: hash, generation: s.generation})
 	if s.persistent == nil {
 		if _, ok := s.tasks[grant.RootTaskID]; !ok {
 			s.tasks[grant.RootTaskID] = taskRecord{ID: grant.RootTaskID, State: "created", CreatedAt: time.Now().UTC()}
@@ -98,27 +102,20 @@ func (s *Service) RevokeCapability(token string) error {
 	var scopes []taskstore.Scope
 	s.mu.Lock()
 	if s.persistent != nil {
-		if scope, ok := s.persistent.revocationIntents[hash]; ok {
+		if scope, ok := s.persistent.issuedScopes[hash]; ok {
+			s.persistent.revokedRoots[scope] = true
 			scopes = append(scopes, scope)
+			for op := range s.persistent.operations {
+				if op.scope == scope {
+					op.cancel()
+				}
+			}
 		}
 	}
 	for i := range s.capabilities {
 		if subtle.ConstantTimeCompare(hash[:], s.capabilities[i].tokenHash[:]) == 1 {
 			s.capabilities[i].revoked = true
 			root := s.capabilities[i].grant.RootTaskID
-			if s.persistent != nil {
-				scope := taskstore.Scope{CallerID: s.capabilities[i].grant.CallerID, RootID: root}
-				s.persistent.revokedRoots[scope] = true
-				if _, exists := s.persistent.revocationIntents[hash]; !exists {
-					s.persistent.revocationIntents[hash] = scope
-					scopes = append(scopes, scope)
-				}
-				for op := range s.persistent.operations {
-					if op.scope == scope {
-						op.cancel()
-					}
-				}
-			}
 			if task, ok := s.tasks[root]; ok {
 				task.Revoked = true
 				s.tasks[root] = task
@@ -148,8 +145,8 @@ func (s *Service) RotateGeneration() {
 		}
 	}
 	s.generation++
-	// Drop live authorization hashes, including at uint64 wraparound. Durable
-	// revocation retry intents are separate and must survive every rotation.
+	// Drop live authorization hashes, including at uint64 wraparound. Issued
+	// token scopes are separate and survive rotation for first revoke/retry.
 	s.capabilities = nil
 }
 

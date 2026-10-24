@@ -30,6 +30,22 @@ func (s *recoverableRevocationStore) RevokeRoot(ctx context.Context, scope tasks
 }
 
 func TestRevocationRetrySurvivesRotationsAndReopen(t *testing.T) {
+	for _, rotateFirst := range []bool{false, true} {
+		name := "revoke-before-rotate"
+		if rotateFirst {
+			name = "rotate-before-first-revoke"
+		}
+		for _, failFirst := range []bool{false, true} {
+			variant := name + "/write-succeeds"
+			if failFirst {
+				variant = name + "/first-write-fails"
+			}
+			t.Run(variant, func(t *testing.T) { testRevocationRetryReopen(t, rotateFirst, failFirst) })
+		}
+	}
+}
+
+func testRevocationRetryReopen(t *testing.T, rotateFirst, failFirst bool) {
 	ctx := context.Background()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -64,17 +80,23 @@ func TestRevocationRetrySurvivesRotationsAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unstable.unavailable.Store(true)
-	if err = s.RevokeCapability(token); err == nil {
-		t.Fatal("failed initial write acknowledged")
+	if rotateFirst {
+		s.RotateGeneration()
+	}
+	unstable.unavailable.Store(failFirst)
+	if err = s.RevokeCapability(token); (err != nil) != failFirst {
+		t.Fatalf("first revoke error=%v, failFirst=%v", err, failFirst)
 	}
 	s.RotateGeneration()
 	s.RotateGeneration()
-	if err = s.RevokeCapability(token); err == nil {
-		t.Fatal("rotation lost failed intent")
+	if err = s.RevokeCapability(token); (err != nil) != failFirst {
+		t.Fatalf("retry after rotations error=%v, failFirst=%v", err, failFirst)
 	}
 	if unstable.writes.Load() != 2 {
 		t.Fatal("retry skipped durable write")
+	}
+	if _, err = s.IssueCapability(grant); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("pending revocation allowed reissue", err)
 	}
 	unstable.unavailable.Store(false)
 	if err = s.RevokeCapability(token); err != nil {
