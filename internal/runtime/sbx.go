@@ -112,6 +112,13 @@ type managed struct {
 	env     Environment
 	removed bool
 	grants  map[string]bool
+	// Lease metadata is protected by SbxBackend.mu; environment state/grants
+	// are accessed only by the exclusive operation lease, never under a runner lock.
+	quarantined    bool
+	busy           bool
+	controlPending bool
+	cancel         context.CancelFunc
+	done           chan struct{}
 }
 type SbxBackend struct {
 	runner    CommandRunner
@@ -274,8 +281,6 @@ func (b *SbxBackend) preflight(ctx context.Context) error {
 	return err
 }
 func (b *SbxBackend) Check(ctx context.Context) Diagnostics {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	d := Diagnostics{Backend: b.Name(), Capabilities: b.Capabilities(ctx)}
 	if err := b.preflight(ctx); err != nil {
 		d.Messages = []string{err.Error()}
@@ -349,6 +354,84 @@ func (b *SbxBackend) list(ctx context.Context) ([]Environment, error) {
 	}
 	return result, nil
 }
+
+// acquire serializes one environment without holding mu across I/O. A control
+// operation cancels the current lease and reserves the next slot, preventing a
+// new Exec from slipping between cancellation and Stop/Revoke/Remove.
+func (b *SbxBackend) acquire(ctx context.Context, e Environment, control, allowUnsafe bool) (*managed, context.Context, func(), error) {
+	reserved := false
+	for {
+		b.mu.Lock()
+		m, err := b.require(e)
+		if err != nil {
+			b.mu.Unlock()
+			return nil, nil, nil, err
+		}
+		if control && !reserved {
+			if m.controlPending {
+				b.mu.Unlock()
+				return nil, nil, nil, berr(ErrDenied, "lease", "another control operation is pending")
+			}
+			m.controlPending = true
+			reserved = true
+		}
+		if err = ctx.Err(); err != nil {
+			if reserved {
+				m.controlPending = false
+			}
+			b.mu.Unlock()
+			return nil, nil, nil, err
+		}
+		if !allowUnsafe && m.quarantined {
+			if reserved {
+				m.controlPending = false
+			}
+			b.mu.Unlock()
+			return nil, nil, nil, berr(ErrDenied, "lease", "environment quarantined; only inspection and cleanup allowed")
+		}
+		if !control && m.controlPending {
+			b.mu.Unlock()
+			return nil, nil, nil, berr(ErrDenied, "lease", "control operation pending")
+		}
+		if m.busy {
+			done := m.done
+			if control {
+				m.cancel()
+			}
+			b.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				b.mu.Lock()
+				if reserved {
+					m.controlPending = false
+				}
+				b.mu.Unlock()
+				return nil, nil, nil, ctx.Err()
+			}
+		}
+		opCtx, cancel := context.WithCancel(ctx)
+		m.busy = true
+		m.cancel = cancel
+		m.done = make(chan struct{})
+		if reserved {
+			m.controlPending = false
+		}
+		b.mu.Unlock()
+		release := func() {
+			cancel()
+			b.mu.Lock()
+			m.busy = false
+			m.cancel = nil
+			close(m.done)
+			b.mu.Unlock()
+		}
+		return m, opCtx, release, nil
+	}
+}
+
+// require is called only with mu held. Stored identity fields are immutable.
 func (b *SbxBackend) require(e Environment) (*managed, error) {
 	m, ok := b.owned[e.ID]
 	if !ok || m.env.Name != e.Name || e.Backend != b.Name() {
@@ -378,8 +461,6 @@ func cleanupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
 }
 func (b *SbxBackend) Create(ctx context.Context, s EnvironmentSpec) (Environment, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if err := validate(s); err != nil {
 		return Environment{}, err
 	}
@@ -433,6 +514,7 @@ func (b *SbxBackend) Create(ctx context.Context, s EnvironmentSpec) (Environment
 		err = b.network(ctx, m, s.NetworkRules)
 	}
 	if err != nil {
+		b.quarantine(m)
 		c, cancel := cleanupContext()
 		defer cancel()
 		_, rollback := b.current(c, m)
@@ -440,30 +522,36 @@ func (b *SbxBackend) Create(ctx context.Context, s EnvironmentSpec) (Environment
 			_, rollback = b.run(c, "rm", "--force", "--", name)
 		}
 		if rollback != nil {
-			return Environment{}, errors.Join(err, berr(ErrRunner, "rollback", "new sandbox removal failed"))
+			// Preserve the confirmed identity as cleanup-only and return it with
+			// the error; callers must never treat this as successful creation.
+			b.mu.Lock()
+			b.owned[id] = m
+			b.mu.Unlock()
+			return e, b.failStop(m, errors.Join(err, berr(ErrRunner, "rollback", "new sandbox removal failed; environment quarantined")))
 		}
 		return Environment{}, err
 	}
 	m.env = e
+	b.mu.Lock()
 	b.owned[id] = m
+	b.mu.Unlock()
 	return e, nil
 }
 func (b *SbxBackend) Inspect(ctx context.Context, e Environment) (Environment, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, false, true)
 	if err != nil {
 		return Environment{}, err
 	}
-	return b.current(ctx, m)
+	defer release()
+	return b.current(opCtx, m)
 }
 func (b *SbxBackend) Start(ctx context.Context, e Environment) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, false, false)
 	if err != nil {
 		return err
 	}
+	defer release()
+	ctx = opCtx
 	if _, err = b.current(ctx, m); err != nil {
 		return err
 	}
@@ -472,12 +560,12 @@ func (b *SbxBackend) Start(ctx context.Context, e Environment) error {
 	return berr(ErrUnsupported, "start", "sbx lacks an atomic start-existing-only command; refusing implicit creation")
 }
 func (b *SbxBackend) Exec(ctx context.Context, e Environment, r ExecRequest) (string, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, false, false)
 	if err != nil {
 		return "", err
 	}
+	defer release()
+	ctx = opCtx
 	if len(r.Command) == 0 || r.Command[0] == "" || strings.HasPrefix(r.Command[0], "-") || r.User != "" && r.User != "agent" && r.User != "root" {
 		return "", berr(ErrInvalid, "exec", "invalid command/user")
 	}
@@ -535,6 +623,7 @@ func (b *SbxBackend) network(ctx context.Context, m *managed, rules []NetworkRul
 		failure = b.policies(ctx, m.env.Name, expected)
 	}
 	if failure != nil {
+		b.quarantine(m)
 		c, cancel := cleanupContext()
 		defer cancel()
 		if _, err := b.current(c, m); err != nil {
@@ -553,15 +642,15 @@ func (b *SbxBackend) network(ctx context.Context, m *managed, rules []NetworkRul
 	return nil
 }
 func (b *SbxBackend) SetNetworkPolicy(ctx context.Context, e Environment, rules []NetworkRule) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if err := validRules(rules); err != nil {
 		return err
 	}
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, true, false)
 	if err != nil {
 		return err
 	}
+	defer release()
+	ctx = opCtx
 	if _, err = b.current(ctx, m); err != nil {
 		return err
 	}
@@ -570,7 +659,15 @@ func (b *SbxBackend) SetNetworkPolicy(ctx context.Context, e Environment, rules 
 
 // failStop never relies on a cancelled request context, and rechecks identity
 // before name-based CLI operations. A same-user malicious host race remains outside this boundary.
+func (b *SbxBackend) quarantine(m *managed) {
+	b.mu.Lock()
+	m.quarantined = true
+	b.mu.Unlock()
+}
 func (b *SbxBackend) failStop(m *managed, cause error) error {
+	// Quarantine persists even when cleanup fails or Stop succeeds: old grants
+	// may still exist and a later Exec would implicitly restart the sandbox.
+	b.quarantine(m)
 	c, cancel := cleanupContext()
 	defer cancel()
 	if _, err := b.current(c, m); err != nil {
@@ -582,12 +679,12 @@ func (b *SbxBackend) failStop(m *managed, cause error) error {
 
 // Revoke removes a recorded scoped network resource only. Controller must revoke application tokens.
 func (b *SbxBackend) Revoke(ctx context.Context, e Environment, grant string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, true, true)
 	if err != nil {
 		return err
 	}
+	defer release()
+	ctx = opCtx
 	if !m.grants[grant] {
 		return berr(ErrNotFound, "revoke", "unknown scoped grant")
 	}
@@ -604,12 +701,12 @@ func (b *SbxBackend) Revoke(ctx context.Context, e Environment, grant string) er
 	return nil
 }
 func (b *SbxBackend) Stop(ctx context.Context, e Environment) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, true, true)
 	if err != nil {
 		return err
 	}
+	defer release()
+	ctx = opCtx
 	if m.removed {
 		return nil
 	}
@@ -626,15 +723,18 @@ func (b *SbxBackend) Stop(ctx context.Context, e Environment) error {
 		return nil
 	}
 	_, err = b.run(ctx, "stop", "--", m.env.Name)
+	if err != nil {
+		b.quarantine(m)
+	}
 	return err
 }
 func (b *SbxBackend) Remove(ctx context.Context, e Environment) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, true, true)
 	if err != nil {
 		return err
 	}
+	defer release()
+	ctx = opCtx
 	if m.removed {
 		return nil
 	}
@@ -650,6 +750,8 @@ func (b *SbxBackend) Remove(ctx context.Context, e Environment) error {
 	_, err = b.run(ctx, "rm", "--force", "--", m.env.Name)
 	if err == nil {
 		m.removed = true
+	} else {
+		return b.failStop(m, err)
 	}
 	return err
 }
@@ -719,12 +821,12 @@ func readBounded(p string, limit int64) ([]byte, error) {
 
 // CopyIn accepts one bounded regular file, stages immutable bytes, and never passes -L.
 func (b *SbxBackend) CopyIn(ctx context.Context, e Environment, src, dst string) (CopyReceipt, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	m, err := b.require(e)
+	m, opCtx, release, err := b.acquire(ctx, e, false, false)
 	if err != nil {
 		return CopyReceipt{}, err
 	}
+	defer release()
+	ctx = opCtx
 	if !validGuestPath(dst) {
 		return CopyReceipt{}, berr(ErrInvalid, "copy", "canonical guest /tmp or /work file required")
 	}
@@ -753,11 +855,11 @@ func (b *SbxBackend) CopyIn(ctx context.Context, e Environment, src, dst string)
 // CopyOut fails closed: sbx cp can consume unbounded host disk before returning.
 // No verified bounded binary guest export primitive is available in this adapter.
 func (b *SbxBackend) CopyOut(ctx context.Context, e Environment, s CopySelector) (ArtifactSnapshot, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if _, err := b.require(e); err != nil {
+	_, _, release, err := b.acquire(ctx, e, false, false)
+	if err != nil {
 		return ArtifactSnapshot{}, err
 	}
+	defer release()
 	return ArtifactSnapshot{}, berr(ErrUnsupported, "copy-out", "bounded guest export is not implemented; refusing unbounded host transfer")
 }
 

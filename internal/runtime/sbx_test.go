@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -328,6 +329,124 @@ func TestRevokeFailureAndCancellationStops(t *testing.T) {
 		if err == nil || !f.stopped || !f.deadline {
 			t.Fatal("revoke failure left running", err)
 		}
+	}
+}
+func TestFailedRevokeQuarantinesExec(t *testing.T) {
+	b, f, e := created(t)
+	if err := b.SetNetworkPolicy(context.Background(), e, []NetworkRule{rule(1)}); err != nil {
+		t.Fatal(err)
+	}
+	f.fail["policy rm network --force --sandbox "+e.Name+" --resource localhost:1"] = true
+	if err := b.Revoke(context.Background(), e, "localhost:1"); err == nil {
+		t.Fatal("revoke unexpectedly succeeded")
+	}
+	before := len(f.calls)
+	_, err := b.Exec(context.Background(), e, ExecRequest{Command: []string{"printf", "--help"}, User: "agent"})
+	assertKind(t, err, ErrDenied)
+	if len(f.calls) != before {
+		t.Fatal("quarantined environment executed")
+	}
+	assertKind(t, b.SetNetworkPolicy(context.Background(), e, nil), ErrDenied)
+	assertKind(t, b.Start(context.Background(), e), ErrDenied)
+	if err := b.Remove(context.Background(), e); err != nil {
+		t.Fatal("quarantined cleanup", err)
+	}
+}
+
+type failedCreateCleanupRunner struct{ base *fakeRun }
+
+func (r *failedCreateCleanupRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "rm" {
+		return nil, errors.New("synthetic removal failure")
+	}
+	return r.base.Run(ctx, args...)
+}
+func TestCreateRollbackFailureRetainsQuarantinedIdentity(t *testing.T) {
+	f := readyFake(t)
+	f.badResources = true
+	b := NewSbxBackend(&failedCreateCleanupRunner{base: f})
+	e, err := b.Create(context.Background(), spec())
+	if err == nil || e.ID == "" || !f.stopped {
+		t.Fatal("failed cleanup identity/stop missing", e, err)
+	}
+	_, err = b.Exec(context.Background(), e, ExecRequest{Command: []string{"printf", "--help"}, User: "agent"})
+	assertKind(t, err, ErrDenied)
+}
+func TestFailedPolicyRollbackQuarantinesExec(t *testing.T) {
+	b, f, e := created(t)
+	f.fail["policy allow network --sandbox "+e.Name+" -- localhost:2"] = true
+	f.fail["policy rm network --force --sandbox "+e.Name+" --resource localhost:1"] = true
+	if err := b.SetNetworkPolicy(context.Background(), e, []NetworkRule{rule(1), rule(2)}); err == nil {
+		t.Fatal("policy unexpectedly succeeded")
+	}
+	before := len(f.calls)
+	_, err := b.Exec(context.Background(), e, ExecRequest{Command: []string{"printf", "--help"}, User: "agent"})
+	assertKind(t, err, ErrDenied)
+	if len(f.calls) != before {
+		t.Fatal("rollback failure permitted execution")
+	}
+}
+
+// blockingRunner cancels a long Exec when a control operation reserves its
+// per-environment slot. It delegates setup to the normal fake runner.
+type blockingRunner struct {
+	base    *fakeRun
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "exec" {
+		r.once.Do(func() { close(r.entered) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return r.base.Run(ctx, args...)
+}
+func TestControlCancelsLongExecWithoutGlobalRunnerLock(t *testing.T) {
+	for _, control := range []string{"stop", "revoke"} {
+		t.Run(control, func(t *testing.T) {
+			f := readyFake(t)
+			r := &blockingRunner{base: f, entered: make(chan struct{})}
+			b := NewSbxBackend(r, copyTestDir(t))
+			e, err := b.Create(context.Background(), spec())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if control == "revoke" {
+				if err = b.SetNetworkPolicy(context.Background(), e, []NetworkRule{rule(1)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			execDone := make(chan error, 1)
+			go func() {
+				_, err := b.Exec(context.Background(), e, ExecRequest{Command: []string{"long-running"}})
+				execDone <- err
+			}()
+			select {
+			case <-r.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("exec did not enter runner")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if control == "stop" {
+				err = b.Stop(ctx, e)
+			} else {
+				err = b.Revoke(ctx, e, "localhost:1")
+			}
+			if err != nil {
+				t.Fatal("control blocked by long Exec", err)
+			}
+			select {
+			case err = <-execDone:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("exec not cancelled", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("exec still blocked")
+			}
+		})
 	}
 }
 func TestCopyInAndUnsupportedOut(t *testing.T) {
