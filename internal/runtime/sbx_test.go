@@ -117,10 +117,39 @@ func (f *fakeRun) Run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, nil
 	}
 }
+
+// copyTestDir avoids platform temporary-directory aliases (for example macOS
+// /var -> /private/var). Resolve only the trusted test workspace, not paths
+// submitted to the backend: production ancestor-link denial remains unchanged.
+func copyTestDir(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, ".sbx-copy-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("clean copy test directory: %v", err)
+		}
+	})
+	if err := safeHost(dir, false); err != nil {
+		t.Fatalf("copy test directory must have no linked ancestors: %v", err)
+	}
+	return dir
+}
+
 func created(t *testing.T) (*SbxBackend, *fakeRun, Environment) {
 	t.Helper()
 	f := readyFake(t)
-	b := NewSbxBackend(f, t.TempDir())
+	b := NewSbxBackend(f, copyTestDir(t))
 	e, err := b.Create(context.Background(), spec())
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +332,7 @@ func TestRevokeFailureAndCancellationStops(t *testing.T) {
 }
 func TestCopyInAndUnsupportedOut(t *testing.T) {
 	b, f, e := created(t)
-	src := filepath.Join(t.TempDir(), "input")
+	src := filepath.Join(copyTestDir(t), "input")
 	if err := os.WriteFile(src, []byte{0, 255, 1}, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +361,7 @@ func TestCopyInAndUnsupportedOut(t *testing.T) {
 	}
 }
 func TestSymlinkParents(t *testing.T) {
-	d := t.TempDir()
+	d := copyTestDir(t)
 	target := filepath.Join(d, "target")
 	if err := os.Mkdir(target, 0700); err != nil {
 		t.Fatal(err)
