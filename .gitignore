@@ -1,0 +1,26 @@
+# Generated artifacts and local credentials
+*.exe
+*.msi
+*.zip
+*.log
+
+# Go and frontend caches
+.gocache/
+node_modules/
+dist/
+
+# Local validation evidence, installation scripts, and runtime state
+/validation/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
