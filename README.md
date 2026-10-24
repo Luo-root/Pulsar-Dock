@@ -2,7 +2,9 @@
 
 Pulsar-Dock 是面向人和 Agent 的桌面安全协作工作台。Agent 在受控环境中工作，用户通过 Dock 授权、观察、审阅和应用成果；Agent 可以通过 Dock 创建受限协作者、查询任务和交付固定版本成果。
 
-当前仓库处于比赛 P0 原型阶段。第一条真实竖向链路已经验证：Claude Code 在 Docker Sandboxes guest 中，经 Magpie 模型入口和 sbx MCP gateway 调用 Dock 的 MCP 工具。当前 MCP 网关的任务记录仍是内存态，尚未创建真实子 Agent 环境。
+当前仓库处于比赛 P0 原型阶段。历史探针验证过 Claude Code guest 经 Magpie 和 sbx MCP gateway 调用 Dock 的内存态 MCP 工具，但没有创建真实子 Agent 环境，不能作为当前完整产品闭环的证据。
+
+截至 2026-10-24，主线已合并 SbxBackend、SQLite 任务存储、原子环境绑定、可信 Controller 创建服务和 MCP capability 校验。Controller 创建只推进到 Preparing；Start、CopyOut 和 Controller StopTask 仍明确不支持。默认 `dock-gateway` 尚未接入可信 authenticator，所有业务工具调用会拒绝。持久 MCP/Controller 接缝及 schema v2 持久撤权仍在 PR #25 审查中，尚未进入主线。真实 Agent 启动、成果交接、生产通道认证和桌面包仍未完成。
 
 ## 文档
 

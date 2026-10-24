@@ -190,7 +190,11 @@ RuntimeBackend
 
 ### 首版 SbxBackend
 
-`SbxBackend` 是首版 P0 计划实现的运行时适配器（Issue #3），当前代码尚只有 RuntimeBackend 接口，已记录的 sbx 探针是手动/脚本实测，不代表该适配器已经实现。目标行为：调用固定版本 `sbx v0.49.2`，创建无 workspace 挂载、`--skills off` 的本地 microVM；通过 scoped network policy 开放每环境 Dock 网关端口；Stop/Remove 负责回收运行时；Controller 另行维护环境身份和上游凭据撤销。模板摘要、CLI 版本和安全设置必须固定并写入事件。
+截至 2026-10-24，`SbxBackend` 已通过 PR #12 合入主线（Issue #3）：固定 `sbx v0.49.2` 与镜像摘要，创建无 workspace 挂载、`--skills off` 的环境，并实现身份核对、Exec、有限 CopyIn、scoped 网络策略替换、撤权和 Stop/Remove。Start 因隐式创建风险、CopyOut 因缺少传输期间字节上限而明确返回 unsupported；不能将其描述为完整运行时或成果出口。
+
+SQLite 任务存储、环境 ID 原子绑定和可信 Controller 创建服务已分别通过 PR #11/#17/#18 合入；Controller 只推进至 Preparing，网关/TTL 参数当前拒绝，StopTask 尚未实现。PR #22 已加入进程内 MCP capability 校验，默认命令入口未配置可信 authenticator，拒绝业务调用。持久 MCP/Controller 接缝与 schema v2 撤权仍属待审 PR #25，不是当前主线保证。
+
+既有 sbx 与 Claude 探针是独立手动/脚本实测，未验收当前 Go 适配器驱动的真实多 Agent 闭环。后续仍需验证受控网关、Agent 启动、成果交接和停止树回收；模板摘要、CLI 版本和安全设置写入事件也仍是目标要求。
 
 SbxBackend 不把 Docker 登录、镜像拉取、sbx 审批请求或 Docker 的全局配置暴露成产品概念。桌面层只显示“安全运行环境未准备好/需要授权/模板下载失败”等可解释状态。它也不能把 sbx 的 Docker 登录状态当成 Agent 身份认证。
 
