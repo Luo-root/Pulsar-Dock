@@ -2,6 +2,7 @@ package dockmcp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -50,13 +51,17 @@ type taskRecord struct {
 }
 
 type Service struct {
-	mu       sync.Mutex
-	sequence uint64
-	tasks    map[string]taskRecord
+	mu        sync.Mutex
+	sequence  uint64
+	tasks     map[string]taskRecord
+	artifacts map[string]PublishInput // In-memory references only; no artifact files are persisted.
 }
 
 func NewService() *Service {
-	return &Service{tasks: make(map[string]taskRecord)}
+	return &Service{
+		tasks:     make(map[string]taskRecord),
+		artifacts: make(map[string]PublishInput),
+	}
 }
 
 func (s *Service) CreateServer() *mcp.Server {
@@ -71,7 +76,7 @@ func (s *Service) CreateServer() *mcp.Server {
 	}, s.status)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "artifact.publish",
-		Description: "Publish an immutable artifact reference for later review. This never applies changes to the host project.",
+		Description: "Record an artifact reference in memory for an existing task. This prototype does not persist artifact files or implement an ArtifactStore, and never applies changes to the host project.",
 	}, s.publish)
 	return server
 }
@@ -102,6 +107,16 @@ func (s *Service) publish(_ context.Context, _ *mcp.CallToolRequest, input Publi
 	if input.TaskID == "" || input.Kind == "" || input.Digest == "" {
 		return nil, PublishOutput{}, fmt.Errorf("task_id, kind, and digest are required")
 	}
-	payload, _ := json.Marshal(input)
-	return nil, PublishOutput{ArtifactID: fmt.Sprintf("artifact-%x", payload[:8]), State: "published"}, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[input.TaskID]; !ok {
+		return nil, PublishOutput{}, fmt.Errorf("task %q is not visible", input.TaskID)
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, PublishOutput{}, fmt.Errorf("serialize artifact reference: %w", err)
+	}
+	id := fmt.Sprintf("artifact-%x", sha256.Sum256(payload))
+	s.artifacts[id] = input
+	return nil, PublishOutput{ArtifactID: id, State: "published"}, nil
 }

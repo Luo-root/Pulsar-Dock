@@ -190,7 +190,7 @@ RuntimeBackend
 
 ### 首版 SbxBackend
 
-`SbxBackend` 是当前 P0 的实际实现：调用固定版本 `sbx v0.49.2`，创建无 workspace 挂载、`--skills off` 的本地 microVM；通过 scoped network policy 开放每环境 Dock 网关端口；Stop/Remove 负责回收运行时；Controller 另行维护环境身份和上游凭据撤销。模板摘要、CLI 版本和安全设置必须固定并写入事件。
+`SbxBackend` 是首版 P0 计划实现的运行时适配器（Issue #3），当前代码尚只有 RuntimeBackend 接口，已记录的 sbx 探针是手动/脚本实测，不代表该适配器已经实现。目标行为：调用固定版本 `sbx v0.49.2`，创建无 workspace 挂载、`--skills off` 的本地 microVM；通过 scoped network policy 开放每环境 Dock 网关端口；Stop/Remove 负责回收运行时；Controller 另行维护环境身份和上游凭据撤销。模板摘要、CLI 版本和安全设置必须固定并写入事件。
 
 SbxBackend 不把 Docker 登录、镜像拉取、sbx 审批请求或 Docker 的全局配置暴露成产品概念。桌面层只显示“安全运行环境未准备好/需要授权/模板下载失败”等可解释状态。它也不能把 sbx 的 Docker 登录状态当成 Agent 身份认证。
 
