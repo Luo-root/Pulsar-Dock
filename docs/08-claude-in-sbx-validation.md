@@ -24,7 +24,7 @@ Claude guest
   -> deepseek/deepseek-flash[1m]
 ```
 
-Claude 成功调用 Dock 的 `task.create_child`，返回 `task-0001 / created`，随后又用 `task.status` 查询同一个 `task-0001`，返回同样的 goal 与 `created` 状态。原始 stream-json 工具事件经过断言提取到 `validation/2026-10-24/claude-mcp-tool-evidence.json`。这证明了 Dock 当前 MCP 协作接口可以被真实 Agent 发现、调用和查询，并能运行在真实 sbx guest 内。
+Claude 成功调用 Dock 的 `task.create_child`，返回 `task-0001 / created`，随后又用 `task.status` 查询同一个 `task-0001`，返回同样的 goal 与 `created` 状态。原始 stream-json 工具事件经过断言校验后仅在本地留存，不随源码提交。本页保留测试条件、精简结果与能力边界；提取和校验代码保留在 `tests/sandbox/check-claude-trace.ps1`。
 
 这不是完整产品完成，也不是安全认证。真实 MCP 服务、Skill、生产凭据注入、子环境实际创建、任务执行和成果交接仍未完成。
 
@@ -51,12 +51,7 @@ Claude 成功调用 Dock 的 `task.create_child`，返回 `task-0001 / created`�
 
 ### 宿主侧首次尝试
 
-使用严格临时 MCP 配置启动 Claude：
-
-```text
-claude --mcp-config validation/2026-10-23/claude-dock-mcp.json \
-  --strict-mcp-config --print --no-session-persistence
-```
+使用本地生成的临时 MCP 配置，通过 `--mcp-config <本地配置文件>`、`--strict-mcp-config`、`--print` 和 `--no-session-persistence` 启动 Claude。该文件包含当前机器的可执行程序路径，因此不随源码提交。
 
 第一次失败原因是模型代理返回 HTTP 200 的 HTML 页面，Claude 报 `malformed response`。MCP 网关还没有进入工具调用阶段。
 
@@ -106,7 +101,7 @@ Dock 返回：
 
 未验证：
 
-- Claude 是否能在同一任务里继续调用 `task.status` 并循环等待；
+- 在同一会话中持续轮询或等待异步子任务完成（本轮只查询了一次已创建的任务记录）；
 - `task.create_child` 是否真正触发 SbxBackend 创建第二个环境（本轮只创建了内存态任务记录）；
 - MCP 工具参数是否经过完整的环境身份与父任务策略检查；
 - Claude 的真实文件修改、测试和成果快照回收；
@@ -123,9 +118,9 @@ Dock 返回：
 - `internal/dockmcp/service_test.go`：创建/查询和未知任务拒绝测试；
 - `cmd/dock-gateway/main.go`：stdio MCP 网关入口；
 - `go.mod` / `go.sum`：Go 1.26 与官方 MCP Go SDK v1.8.0；
-- `validation/2026-10-24-claude-mcp-smoke.json`：宿主侧成功记录；
-- `validation/2026-10-24-claude-in-sbx-mcp.json`：真实 guest 链路记录；
-- `validation/2026-10-24/claude-mcp-tool-evidence.json`：从 Claude stream-json 原始事件提取并断言的两次工具调用/返回。
+- `tests/sandbox/check-claude-trace.ps1`：对本地 Claude stream-json 事件中的工具调用、返回和 task ID 一致性执行断言。
+
+宿主/guest 的原始会话事件、提取 JSON 和临时配置属于本机验证产物，保留在被忽略的 `validation/` 中，不列入源码清单，也不作为克隆后的必需输入。复测方法见 [沙箱测试说明](../tests/sandbox/README.md)。
 
 运行测试后，Claude 测试沙箱和临时 `pulsar-dock-local` 注册已经删除；`sbx ls` 和 `sbx mcp ls` 均为空。当前网关服务是原型：`task.create_child` 只写内存态 task record，不会创建子 VM；不要当成已经实现的生产 Controller 或完整 SbxBackend。
 

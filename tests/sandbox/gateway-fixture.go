@@ -44,8 +44,12 @@ type route struct {
 }
 
 func main() {
-	out := flag.String("out", "validation/2026-10-23", "Evidence directory")
+	out := flag.String("out", "", "Required directory for local-only evidence")
 	flag.Parse()
+	if *out == "" {
+		fmt.Fprintln(os.Stderr, "-out is required; generated evidence is not part of the source repository")
+		os.Exit(2)
+	}
 	if err := os.MkdirAll(*out, 0700); err != nil {
 		panic(err)
 	}

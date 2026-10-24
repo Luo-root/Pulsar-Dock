@@ -15,7 +15,7 @@
 | 项目 | 状态 |
 |---|---|
 | 宿主 | Windows 11 家庭版 x64，build 26200，约 31.7GiB RAM |
-| Go | 从 1.24.0 升到 1.26.10，原安装目录 `D:\Backend\go` 保持不变 |
+| Go | 从 1.24.0 升到 1.26.10，保留原安装位置；具体路径只留本机 |
 | Go 安装证据 | 官方 MSI SHA-256 匹配，Google LLC Authenticode 有效，MSI exit=0；最小 HTTP/JSON/SHA-256 程序实际编译运行通过 |
 | sbx | v0.49.2，commit `5d40fd43027b33ed1f1a39c14fb07e2503d6998f`；官方 MSI 哈希与 Docker Inc 签名通过，安装 exit=0 |
 | Windows Hypervisor Platform | 从 Disabled 启用为 Enabled；系统当时返回 RestartNeeded=true，本轮未主动重启，但 sbx 虚拟化诊断与实际 microVM 启动成功 |
@@ -81,18 +81,17 @@ mcp.forceLocalGateway = true
 - mTLS/通道硬绑定、token 单次重放防护、不可逆数据流控制、只读输入不可篡改。
 - 安装包再分发与集成授权条款；Wails/UI/SQLite/MCP SDK 的完整依赖构建。
 
-## 6. 证据与复测入口
+## 6. 测试代码与本地证据
 
-工作区：`D:\Github-Project\pulsar dock`。
+仓库保留 `tests/sandbox/` 中的合成探针、执行脚本和结果校验器。本页保留实测版本、结论、失败与未覆盖范围；原始事件、运行结果 JSON、安装记录、本机路径和临时配置只留在本地被忽略的 `validation/` 目录，不是源码交付的一部分。克隆仓库后不会自带历史实测数据，校验脚本不能凭空重新证明历史结果。
 
-- 探针源码：`tests/sandbox/guest-probe.go`、`gateway-fixture.go`。
-- 执行记录脚本：`tests/sandbox/check-cli.ps1`、`run-probes.ps1`。
-- 具体输入、返回值与策略日志：`validation/2026-10-23/sandbox-probe-results.json`、`final-network-log-a.json`、`final-network-log-b.json`。
-- 配置与 guest 清单：`effective-settings.json`、`pulsar-probe-a-20261023-inventory.json`、`pulsar-probe-b-20261023-inventory.json`。
-- 并发、生命周期、撤权与清理：`concurrency-results.json`、`lifecycle-results.json`、`revocation-results.json`、`cleanup-results.json`。
-- 安装：`hypervisor-setup-result.json`、`elevated-setup-result.json`；安装完整日志留本机，不随精简报告打包。
+- `guest-probe.go`、`gateway-fixture.go`：构建合成探针与受控网关；通过显式文件路径构建，不合并成一个 Go package。
+- `check-cli.ps1 -EvidenceRoot <本地目录>`：记录当前 sbx 版本、帮助和守护进程状态。
+- `run-probes.ps1`：显式指定两套测试沙箱、各自的网关端口、合成宿主 canary 的 guest 路径和输出目录，采集新的探针结果。
+- `check-results.ps1 -EvidenceRoot <本地目录> -SandboxA <名称> -SandboxB <名称>`：对已有完整证据执行断言。还需提供并发、生命周期、撤权、guest 清单和清理记录，不能仅运行 `run-probes.ps1` 就宣称全套验证完成。
+- 具体准备方法见 [沙箱测试说明](../tests/sandbox/README.md)。
 
-`run-probes.ps1` 使用本轮固定的 A/B 名称、guest 二进制路径及合成网关端口，不是无需准备即可重跑的生产测试器；下次须先重新创建同配置环境、编译复制探针并启动 fixture，修改端口与 scoped allow 后运行。guest 探针网络错误是观察值，最终判定结合正向对照和策略日志，不能只看脚本 exit=0。独立只读核对确认主要网络与并发证据，并要求收窄挂载、SSH 与进程结论；本报告已按指定路径、SSH Agent 和测试服务活动范围表达，不据此宣称所有协议或全部进程树均已验证。
+这些脚本不会自动创建沙箱、批准网络访问或恢复上次本机配置。复测需要先准备合成项目、固定模板与独立环境，再执行允许/拒绝对照；网络错误必须结合正向对照与策略日志判断。独立只读核对要求收窄挂载、SSH 与进程结论，本报告按指定路径、SSH Agent 和测试服务活动范围表达，不据此宣称所有协议或全部进程树均已验证。
 
 ## 8. 真实 Claude 竖向链路补充
 

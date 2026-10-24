@@ -1,4 +1,8 @@
-param([string]$EvidenceRoot = (Join-Path $PSScriptRoot '../../validation/2026-10-23'))
+param(
+    [Parameter(Mandatory=$true)][string]$EvidenceRoot,
+    [Parameter(Mandatory=$true)][string]$SandboxA,
+    [Parameter(Mandatory=$true)][string]$SandboxB
+)
 
 $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath($EvidenceRoot)
@@ -37,12 +41,18 @@ foreach ($pair in @(@('a-direct-ip','1.1.1.1:443'),@('a-direct-ipv6','[2606:4700
 $absent = @(Parse-Probe $byId['b-a-file-absent'].output)
 Check 'a-file-not-in-b' ($absent.Count -eq 1 -and $absent[0].not_exist -eq $true)
 foreach ($id in @('a-host-paths-absent','b-host-paths-absent')) {
-    $observations = @(Parse-Probe $byId[$id].output)
-    $unexpected = @($observations | Where-Object { $_.not_exist -ne $true })
-    Check $id ($observations.Count -eq 4 -and $unexpected.Count -eq 0)
+    $record = $byId[$id]
+    $probeArgs = @($record.args)
+    $absentIndex = [Array]::IndexOf($probeArgs, 'absent')
+    if ($absentIndex -lt 0 -or $absentIndex -ge ($probeArgs.Count - 1)) { throw ('Missing requested paths: ' + $id) }
+    $requestedPaths = @($probeArgs[($absentIndex + 1)..($probeArgs.Count - 1)])
+    $observations = @(Parse-Probe $record.output)
+    $unexpected = @($observations | Where-Object { $_.not_exist -ne $true -or $_.path -notin $requestedPaths })
+    $observedPaths = @($observations | ForEach-Object { $_.path } | Sort-Object -Unique)
+    Check $id ($requestedPaths.Count -ge 2 -and $observations.Count -eq $requestedPaths.Count -and $observedPaths.Count -eq $requestedPaths.Count -and $unexpected.Count -eq 0)
 }
-$a = Read-Record 'pulsar-probe-a-20261023-inventory.json'
-$b = Read-Record 'pulsar-probe-b-20261023-inventory.json'
+$a = Read-Record ($SandboxA + '-inventory.json')
+$b = Read-Record ($SandboxB + '-inventory.json')
 Check 'different-boot-identifiers' ($a.boot_id -ne $b.boot_id -and $a.boot_id -ne '' -and $b.boot_id -ne '')
 Check 'ssh-agent-not-available' ($a.ssh_socket_exists -eq $false -and $b.ssh_socket_exists -eq $false -and $a.ssh_add_exit -eq 2 -and $b.ssh_add_exit -eq 2)
 $concurrency = Read-Record 'concurrency-results.json'

@@ -1,6 +1,6 @@
 param(
     [string]$SbxPath = 'sbx',
-    [string]$EvidenceRoot = (Join-Path $PSScriptRoot '../../validation/2026-10-23')
+    [Parameter(Mandatory=$true)][string]$EvidenceRoot
 )
 
 # Read-only sbx capability checks. Does not log in, create sandboxes,

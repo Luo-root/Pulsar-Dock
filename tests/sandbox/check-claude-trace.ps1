@@ -1,6 +1,6 @@
 param(
-    [string]$TracePath = (Join-Path $PSScriptRoot '../../validation/2026-10-24/claude-guest-trace.jsonl'),
-    [string]$OutputPath = (Join-Path $PSScriptRoot '../../validation/2026-10-24/claude-mcp-tool-evidence.json')
+    [Parameter(Mandatory=$true)][string]$TracePath,
+    [Parameter(Mandatory=$true)][string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'
 # Transform recorded JSONL into selected observable evidence. Do not export

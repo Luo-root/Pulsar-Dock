@@ -6,14 +6,11 @@
 
 # Go and frontend caches
 .gocache/
-validation/**/go-cache/
 node_modules/
 dist/
 
-# Local validation downloads and runtime state
-validation/**/downloads/
-validation/**/sandboxd/
-validation/**/state/
+# Local validation evidence, installation scripts, and runtime state
+/validation/
 
 # Local configuration and credentials
 .env

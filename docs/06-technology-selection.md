@@ -60,7 +60,7 @@ Dock 的 Controller 只依赖 `RuntimeBackend`，不直接调用 sbx、Docker、
 
 已读取版本元数据：Wails v2.17.0 要求 Go ≥1.25.0；MCP Go SDK v1.8.0 要求 Go ≥1.25.0；modernc.org/sqlite v1.61.0 要求 Go ≥1.26.0。[S1–S3]
 
-**开发工具链采用 Go 1.26 系列，当前已升级为 Go 1.26.10。** 用户已明确选择 1.26；2026-10-23 使用官方 Windows x64 MSI、校验 SHA-256 和 Google LLC 签名后，在原目录 `D:\Backend\go` 完成升级，并实际编译运行 HTTP/JSON/哈希最小程序。完整依赖图与桌面构建仍未测试。Wails CLI 与库版本保持一致；前端 package-lock、Go go.sum 和环境镜像摘要进入版本管理，比赛期间不跟随 `latest`。
+**开发工具链采用 Go 1.26 系列，当前已升级为 Go 1.26.10。** 用户已明确选择 1.26；2026-10-23 使用官方 Windows x64 MSI、校验 SHA-256 和 Google LLC 签名后完成升级，并实际编译运行 HTTP/JSON/哈希最小程序。安装路径和安装日志只留本机。完整桌面依赖图与桌面构建仍未测试。Wails CLI 与库版本保持一致；前端 package-lock、Go go.sum 和环境镜像摘要进入版本管理，比赛期间不跟随 `latest`。
 
 P0 已通过 `SbxBackend` 的底座基础实测，但这不等于真实 Agent 接入完成。桌面层应显示 Backend 状态：未准备好、需要登录、模板下载中、策略拒绝、运行中、已停止、清理失败；不把 Docker 账号状态显示为 Agent 身份。
 
@@ -70,7 +70,7 @@ P0 已通过 `SbxBackend` 的底座基础实测，但这不等于真实 Agent �
 
 2026-10-24 已完成真实 Agent 竖向路径：Claude Code 2.1.300 在 sbx v0.49.2 无 workspace、`--skills off` guest 内运行；通过 sbx MCP gateway 加载 `pulsar-dock-local`，再由 gateway 连接 Dock stdio 网关，成功调用 `task.create_child`，返回 `task-0001 / created`。模型请求经 `host.docker.internal:3425` 到 Magpie，guest 只注入 `ANTHROPIC_BASE_URL` 和 `magpie` sentinel，不注入真实上游 key。
 
-此前宿主 Claude 临时会话第一次失败是模型代理返回 HTML；切换 Magpie 模型路由后宿主和 guest 均成功。Guest 首次失败是未登录 Claude；通过 Magpie sentinel 路径后成功。该结果证明一条真实 Claude → Magpie → sbx MCP gateway → Dock stdio gateway 路径，不代表其他 Agent、真实 MCP 凭据、上游密钥注入或会话恢复已经完成。证据见 `validation/2026-10-24-claude-in-sbx-mcp.json`。
+此前宿主 Claude 临时会话第一次失败是模型代理返回 HTML；切换 Magpie 模型路由后宿主和 guest 均成功。Guest 首次失败是未登录 Claude；通过 Magpie sentinel 路径后成功。该结果证明一条真实 Claude → Magpie → sbx MCP gateway → Dock stdio gateway 路径，不代表其他 Agent、真实 MCP 凭据、上游密钥注入或会话恢复已经完成。测试结论与限制见 [08](08-claude-in-sbx-validation.md)；原始调用事件和本机配置只保留在本地，不随源码提交。
 
 ## 3. 为什么选 Wails v2
 
@@ -137,7 +137,7 @@ Dock 的三种审批模式实现于同一 Go Policy Service；模式影响询问
 
 Skill 按各 Harness 适配目录和调用方式注入，不依赖 `sbx` 共享库；自定义 Linux 模板预装所需 CLI/依赖，运行时尽量不临时开放包管理网络。Skill 测试覆盖加载、相对引用、脚本、MCP 和越权拒绝。模板以版本和摘要固定，不读取工作区中的任意宿主启动钩子作为可信配置。
 
-建议一个仓库内保持清晰目录即可：`frontend/` 放 UI，`internal/` 放 Go 业务与适配器，`templates/` 放隔离模板，`tests/` 放按现有方案组织的测试，`docs/` 放设计。本轮已创建 `tests/sandbox/` 合成探针与 `validation/2026-10-23/` 精选证据；应用实现目录尚未创建。
+建议一个仓库内保持清晰目录即可：`frontend/` 放 UI，`internal/` 放 Go 业务与适配器，`templates/` 放隔离模板，`tests/` 放可复现测试，`docs/` 放设计与精简结论。根目录 `validation/` 是被 Git 忽略的本地实验目录，用于原始事件、运行结果和本机配置，不属于源码交付。当前已有 `tests/sandbox/` 合成探针与 MCP 网关原型，完整应用尚未实现。
 
 ### 两个需要在原型中明确的能力上限
 

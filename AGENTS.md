@@ -32,5 +32,6 @@ Pulsar-Dock is a security-first desktop Agent collaboration workbench. Product b
 
 - Unit tests cover policy, task state, idempotency, and MCP handlers.
 - Integration/security tests use synthetic projects, virtual credentials, and controlled endpoints.
+- Keep reusable test code in `tests/` and concise conclusions in `docs/`. The root `validation/` directory is ignored local-only evidence: do not commit raw logs, machine state, installation scripts, or generated manifests from it.
 - A failed or unverified check must remain visible in the PR and validation docs.
 - Do not call the project production-ready based on a single local run.
