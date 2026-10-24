@@ -8,6 +8,8 @@ Pulsar-Dock is a security-first desktop Agent collaboration workbench. Product b
 
 - Every code change must be made on a branch and delivered through a Pull Request.
 - Every PR must reference an existing GitHub Issue and describe tests, risks, and known gaps.
+- Before merging, an independent child Agent must read and follow the complete `deep-code-review` Skill and its required references against the latest PR head. Re-review fixes, require green CI, and merge only within the user's explicit project authorization. Release, tags, and deployment require separate authorization.
+- Windows and macOS are the minimum desktop packaging targets. Record architecture, build results, signing/notarization limits, and actual installation/startup checks separately; Go-core CI is not desktop-package validation.
 - Do not push directly to `main`.
 - Keep commits small and meaningful. Preserve the real development history; do not batch the whole project into one final commit.
 - Before the 2026-10-26 09:00 CST code freeze, keep the repository buildable and the working tree understandable.

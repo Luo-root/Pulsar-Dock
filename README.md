@@ -23,7 +23,9 @@ go vet ./...
 go build ./cmd/dock-gateway
 ```
 
-Go 版本要求：1.26.10。真实 Agent 测试需要本机准备 Docker Sandboxes、Magpie 和对应的 Agent 配置；测试使用的真实凭据不能进入仓库。
+Go 版本要求：1.26.10。CI 分别在 Linux、Windows、macOS 执行 Go 核心测试、vet 和网关构建；Linux 另执行竞态测试。这不代表各平台已完成 sbx、桌面 UI、安装包或签名验证。桌面打包最低目标为 Windows 与 macOS，当前尚未产出正式桌面包。
+
+真实 Agent 测试需要本机准备 Docker Sandboxes、Magpie 和对应的 Agent 配置；测试使用的真实凭据不能进入仓库。
 
 ## 开发状态
 
