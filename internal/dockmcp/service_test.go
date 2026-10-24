@@ -12,7 +12,7 @@ import (
 )
 
 func TestCreateChildAndStatus(t *testing.T) {
-	service := NewService()
+	service := testService(t)
 	result, output, err := service.createChild(context.Background(), &mcp.CallToolRequest{}, ChildTaskInput{Goal: "review the patch"})
 	if err != nil || result != nil {
 		t.Fatalf("createChild result=%v err=%v", result, err)
@@ -27,13 +27,13 @@ func TestCreateChildAndStatus(t *testing.T) {
 }
 
 func TestPublishReferences(t *testing.T) {
-	service := NewService()
+	service := testService(t)
 	ctx := context.Background()
-	_, first, err := service.createChild(ctx, nil, ChildTaskInput{Goal: "review the patch"})
+	_, first, err := service.createChild(ctx, &mcp.CallToolRequest{}, ChildTaskInput{Goal: "review the patch"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, second, err := service.createChild(ctx, nil, ChildTaskInput{Goal: "review another patch"})
+	_, second, err := service.createChild(ctx, &mcp.CallToolRequest{}, ChildTaskInput{Goal: "review another patch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestPublishReferences(t *testing.T) {
 	}
 	seen := make(map[string]bool)
 	for _, input := range inputs {
-		result, output, err := service.publish(ctx, nil, input)
+		result, output, err := service.publish(ctx, &mcp.CallToolRequest{}, input)
 		if err != nil || result != nil || output.State != "published" {
 			t.Fatalf("publish result=%v output=%#v err=%v", result, output, err)
 		}
@@ -63,7 +63,7 @@ func TestPublishReferences(t *testing.T) {
 		if stored := service.artifacts[output.ArtifactID]; stored != input {
 			t.Fatalf("stored association=%#v, want %#v", stored, input)
 		}
-		_, repeated, err := service.publish(ctx, nil, input)
+		_, repeated, err := service.publish(ctx, &mcp.CallToolRequest{}, input)
 		if err != nil || repeated != output || len(service.artifacts) != len(seen) {
 			t.Fatalf("repeat output=%#v err=%v records=%d", repeated, err, len(service.artifacts))
 		}
@@ -71,18 +71,18 @@ func TestPublishReferences(t *testing.T) {
 }
 
 func TestPublishRejectsInvalidInputWithoutChangingRecords(t *testing.T) {
-	service := NewService()
+	service := testService(t)
 	ctx := context.Background()
-	_, task, err := service.createChild(ctx, nil, ChildTaskInput{Goal: "review the patch"})
+	_, task, err := service.createChild(ctx, &mcp.CallToolRequest{}, ChildTaskInput{Goal: "review the patch"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	valid := PublishInput{TaskID: task.TaskID, Kind: "review", Digest: "synthetic-digest"}
-	_, published, err := service.publish(ctx, nil, valid)
+	_, published, err := service.publish(ctx, &mcp.CallToolRequest{}, valid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTasks := map[string]taskRecord{task.TaskID: service.tasks[task.TaskID]}
+	wantTasks := map[string]taskRecord{task.TaskID: service.tasks[task.TaskID], "root": service.tasks["root"]}
 	wantArtifacts := map[string]PublishInput{published.ArtifactID: valid}
 	for _, tc := range []struct {
 		name  string
@@ -94,7 +94,7 @@ func TestPublishRejectsInvalidInputWithoutChangingRecords(t *testing.T) {
 		{name: "unknown task", input: PublishInput{TaskID: "task-9999", Kind: valid.Kind, Digest: valid.Digest}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result, output, err := service.publish(ctx, nil, tc.input)
+			result, output, err := service.publish(ctx, &mcp.CallToolRequest{}, tc.input)
 			if err == nil || result != nil || output != (PublishOutput{}) {
 				t.Fatalf("publish result=%v output=%#v err=%v", result, output, err)
 			}
@@ -106,7 +106,7 @@ func TestPublishRejectsInvalidInputWithoutChangingRecords(t *testing.T) {
 }
 
 func TestUnknownTaskDoesNotLeakState(t *testing.T) {
-	service := NewService()
+	service := testService(t)
 	_, _, err := service.status(context.Background(), &mcp.CallToolRequest{}, StatusInput{TaskID: "task-9999"})
 	if err == nil {
 		t.Fatal("expected unknown task to be rejected")
