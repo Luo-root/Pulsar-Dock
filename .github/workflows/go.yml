@@ -11,7 +11,12 @@ permissions:
 
 jobs:
   go:
-    runs-on: ubuntu-latest
+    name: Go core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -20,9 +25,17 @@ jobs:
           cache: true
       - name: Check formatting
         shell: bash
-        run: test -z "$(gofmt -l .)"
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal ./tests)"
+          if [ -n "$unformatted" ]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
       - name: Test
-        run: go test ./...
+        run: go test -count=1 ./...
+      - name: Race test (Linux)
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 ./...
       - name: Vet
         run: go vet ./...
       - name: Build gateway
