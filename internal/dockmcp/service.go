@@ -53,6 +53,7 @@ type taskRecord struct {
 }
 
 type Service struct {
+	persistent    *persistentTasks
 	mu            sync.Mutex
 	sequence      uint64
 	tasks         map[string]taskRecord
@@ -93,9 +94,13 @@ func (s *Service) CreateServer() *mcp.Server {
 		Name:        "task.status",
 		Description: "Read the state of a task visible to the current Agent environment.",
 	}, s.status)
+	artifactDescription := "Record an artifact reference in memory for an existing task. This prototype does not persist artifact files or implement an ArtifactStore, and never applies changes to the host project."
+	if s.persistent != nil {
+		artifactDescription = "Unsupported: persistent ArtifactStore is unavailable. No artifact is published or applied to the host project."
+	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "artifact.publish",
-		Description: "Record an artifact reference in memory for an existing task. This prototype does not persist artifact files or implement an ArtifactStore, and never applies changes to the host project.",
+		Description: artifactDescription,
 	}, s.publish)
 	return server
 }
@@ -113,6 +118,9 @@ func (s *Service) createChild(ctx context.Context, req *mcp.CallToolRequest, inp
 	}
 	if input.Goal == "" {
 		return nil, ChildTaskOutput{}, fmt.Errorf("goal is required")
+	}
+	if s.persistent != nil {
+		return s.createPersistentChild(ctx, grant, input)
 	}
 	key := childRequestKey{grant.CallerID, grant.RootTaskID, grant.EnvironmentID, input.IdempotencyKey}
 	if input.IdempotencyKey != "" {
@@ -146,8 +154,12 @@ func (s *Service) status(ctx context.Context, req *mcp.CallToolRequest, input St
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.authorizeLocked(identity, ActionStatus, input.TaskID); err != nil {
+	grant, err := s.authorizeLocked(identity, ActionStatus, input.TaskID)
+	if err != nil {
 		return nil, StatusOutput{}, err
+	}
+	if s.persistent != nil {
+		return s.persistentStatus(ctx, grant, input.TaskID)
 	}
 	task, ok := s.tasks[input.TaskID]
 	if !ok {
@@ -163,8 +175,15 @@ func (s *Service) publish(ctx context.Context, req *mcp.CallToolRequest, input P
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.authorizeLocked(identity, ActionPublish, input.TaskID); err != nil {
+	grant, err := s.authorizeLocked(identity, ActionPublish, input.TaskID)
+	if err != nil {
 		return nil, PublishOutput{}, err
+	}
+	if s.persistent != nil {
+		if _, err := s.persistentRoot(ctx, grant); err != nil {
+			return nil, PublishOutput{}, err
+		}
+		return nil, PublishOutput{}, ErrArtifactUnsupported
 	}
 	if input.TaskID == "" || input.Kind == "" || input.Digest == "" {
 		return nil, PublishOutput{}, fmt.Errorf("task_id, kind, and digest are required")

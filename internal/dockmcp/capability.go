@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Luo-root/pulsar-dock/internal/taskstore"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -49,8 +50,9 @@ type capability struct {
 	revoked    bool
 }
 
-// IssueCapability is a trusted-host API, never an MCP tool. An absent root is
-// registered as a task record only; this does not create an Agent environment.
+// IssueCapability is a trusted-host API, never an MCP tool. Persistent mode
+// requires an existing root with the matching environment; only the independent
+// prototype registers absent roots as records (not Agent environments).
 // Tokens are returned once and only their hashes are retained.
 func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	if grant.CallerID == "" || grant.RootTaskID == "" || grant.EnvironmentID == "" || !grant.ExpiresAt.After(time.Now()) || len(grant.Actions) == 0 {
@@ -69,9 +71,16 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	grant.Actions = append([]string(nil), grant.Actions...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.persistent != nil {
+		if _, err := s.persistentRoot(context.Background(), grant); err != nil {
+			return "", ErrUnauthorized
+		}
+	}
 	s.capabilities = append(s.capabilities, capability{grant: grant, tokenHash: sha256.Sum256([]byte(token)), generation: s.generation})
-	if _, ok := s.tasks[grant.RootTaskID]; !ok {
-		s.tasks[grant.RootTaskID] = taskRecord{ID: grant.RootTaskID, State: "created", CreatedAt: time.Now().UTC()}
+	if s.persistent == nil {
+		if _, ok := s.tasks[grant.RootTaskID]; !ok {
+			s.tasks[grant.RootTaskID] = taskRecord{ID: grant.RootTaskID, State: "created", CreatedAt: time.Now().UTC()}
+		}
 	}
 	return token, nil
 }
@@ -87,6 +96,9 @@ func (s *Service) RevokeCapability(token string) {
 		if subtle.ConstantTimeCompare(hash[:], s.capabilities[i].tokenHash[:]) == 1 {
 			s.capabilities[i].revoked = true
 			root := s.capabilities[i].grant.RootTaskID
+			if s.persistent != nil {
+				s.persistent.revokedRoots[taskstore.Scope{CallerID: s.capabilities[i].grant.CallerID, RootID: root}] = true
+			}
 			if task, ok := s.tasks[root]; ok {
 				task.Revoked = true
 				s.tasks[root] = task
@@ -127,6 +139,16 @@ func (s *Service) authorizeLocked(identity RequestIdentity, action, taskID strin
 	}
 	if found == nil || found.revoked || found.generation != s.generation || !time.Now().Before(found.grant.ExpiresAt) || found.grant.CallerID != identity.CallerID || found.grant.EnvironmentID != identity.EnvironmentID {
 		return CapabilityGrant{}, ErrUnauthorized
+	}
+	if s.persistent != nil {
+		allowed := false
+		for _, candidate := range found.grant.Actions {
+			allowed = allowed || candidate == action
+		}
+		if !allowed || s.persistent.revokedRoots[taskstore.Scope{CallerID: found.grant.CallerID, RootID: found.grant.RootTaskID}] {
+			return CapabilityGrant{}, ErrUnauthorized
+		}
+		return found.grant, nil
 	}
 	if !s.taskActiveLocked(found.grant.RootTaskID) || (taskID != "" && !s.taskActiveLocked(taskID)) {
 		return CapabilityGrant{}, ErrUnauthorized
