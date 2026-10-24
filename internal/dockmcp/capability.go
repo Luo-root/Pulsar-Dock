@@ -97,6 +97,11 @@ func (s *Service) RevokeCapability(token string) error {
 	hash := sha256.Sum256([]byte(token))
 	var scopes []taskstore.Scope
 	s.mu.Lock()
+	if s.persistent != nil {
+		if scope, ok := s.persistent.revocationIntents[hash]; ok {
+			scopes = append(scopes, scope)
+		}
+	}
 	for i := range s.capabilities {
 		if subtle.ConstantTimeCompare(hash[:], s.capabilities[i].tokenHash[:]) == 1 {
 			s.capabilities[i].revoked = true
@@ -104,7 +109,10 @@ func (s *Service) RevokeCapability(token string) error {
 			if s.persistent != nil {
 				scope := taskstore.Scope{CallerID: s.capabilities[i].grant.CallerID, RootID: root}
 				s.persistent.revokedRoots[scope] = true
-				scopes = append(scopes, scope)
+				if _, exists := s.persistent.revocationIntents[hash]; !exists {
+					s.persistent.revocationIntents[hash] = scope
+					scopes = append(scopes, scope)
+				}
 				for op := range s.persistent.operations {
 					if op.scope == scope {
 						op.cancel()
@@ -140,7 +148,8 @@ func (s *Service) RotateGeneration() {
 		}
 	}
 	s.generation++
-	// Drop old hashes as well, including at uint64 wraparound.
+	// Drop live authorization hashes, including at uint64 wraparound. Durable
+	// revocation retry intents are separate and must survive every rotation.
 	s.capabilities = nil
 }
 

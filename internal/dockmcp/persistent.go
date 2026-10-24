@@ -30,6 +30,9 @@ type persistentTasks struct {
 	store        TaskReader
 	revokedRoots map[taskstore.Scope]bool
 	operations   map[*operationLease]struct{}
+	// Revocation retry identity is independent of live capability generations.
+	// Retain hashes/scopes for this Service lifetime; never retain raw tokens.
+	revocationIntents map[[32]byte]taskstore.Scope
 }
 
 // NewPersistentService uses only the Controller/taskstore as task facts. The
@@ -48,7 +51,7 @@ func NewPersistentService(auth RequestAuthenticator, callerID string, ctl ChildC
 		}
 		return id, nil
 	}
-	return &Service{authenticator: bound, persistent: &persistentTasks{caller: callerID, controller: ctl, store: store, revokedRoots: make(map[taskstore.Scope]bool), operations: make(map[*operationLease]struct{})}}, nil
+	return &Service{authenticator: bound, persistent: &persistentTasks{caller: callerID, controller: ctl, store: store, revokedRoots: make(map[taskstore.Scope]bool), operations: make(map[*operationLease]struct{}), revocationIntents: make(map[[32]byte]taskstore.Scope)}}, nil
 }
 
 func (s *Service) persistentRoot(ctx context.Context, grant CapabilityGrant) (taskstore.Task, error) {
