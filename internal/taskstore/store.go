@@ -340,8 +340,11 @@ func (s *Store) List(ctx context.Context, scope Scope, limit int) ([]Task, error
 // BindEnvironment is a trusted Controller operation, not an Agent-facing API.
 // It binds a backend-returned ID once, without changing task state or the original
 // creation request digest. Retrying the same ID is idempotent only while the
-// expected state still matches. The caller must clean up an environment if this
-// operation fails; this Store does not manage runtime resources.
+// expected state still matches. On failure, the caller must first inspect the
+// persisted binding: only an environment confirmed as an unadopted candidate may
+// be cleaned up. A state conflict, cancellation, or unknown commit result must
+// not directly trigger deletion of a possibly adopted environment. This Store
+// does not manage runtime resources.
 func (s *Store) BindEnvironment(ctx context.Context, scope Scope, id string, expected State, environmentID string) (Task, error) {
 	if err := s.check(ctx); err != nil {
 		return Task{}, err
