@@ -16,7 +16,7 @@ func validRequest() Request {
 
 func planner(t *testing.T, model string) *Claude {
 	t.Helper()
-	c, err := NewClaude(TrustedClaudeConfig{VersionOutput: "2.1.300 (Claude Code)", Model: model})
+	c, err := NewClaude(TrustedClaudeConfig{VersionOutput: "2.1.306 (Claude Code)", Model: model})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,12 +24,12 @@ func planner(t *testing.T, model string) *Claude {
 }
 
 func TestVersionPin(t *testing.T) {
-	for _, version := range []string{"2.1.300 (Claude Code)", "2.1.300 (Claude Code)\n", "2.1.300 (Claude Code)\r\n"} {
+	for _, version := range []string{"2.1.306 (Claude Code)", "2.1.306 (Claude Code)\n", "2.1.306 (Claude Code)\r\n"} {
 		if _, err := NewClaude(TrustedClaudeConfig{VersionOutput: version}); err != nil {
 			t.Errorf("expected exact probe output accepted: %q", version)
 		}
 	}
-	for _, version := range []string{"", "2.1.300", "2.1.30 (Claude Code)", "2.1.301 (Claude Code)", "x2.1.300 (Claude Code)", "2.1.300 (Claude Code) extra", "2.1.300 (Claude Code)\n\n", " 2.1.300 (Claude Code)", "2.1.300 (Claude Code)\r", "2.1.300 (Claude Code)\x00"} {
+	for _, version := range []string{"", "2.1.306", "2.1.30 (Claude Code)", "2.1.301 (Claude Code)", "2.1.300 (Claude Code)", "2.1.307 (Claude Code)", "x2.1.306 (Claude Code)", "2.1.306 (Claude Code) extra", "2.1.306 (Claude Code)\n\n", " 2.1.306 (Claude Code)", "2.1.306 (Claude Code)\r", "2.1.306 (Claude Code)\x00"} {
 		if c, err := NewClaude(TrustedClaudeConfig{VersionOutput: version}); !errors.Is(err, ErrUnsupported) || c != nil {
 			t.Errorf("unexpected version accepted: %q", version)
 		}
@@ -137,7 +137,7 @@ func TestInvalidRequests(t *testing.T) {
 
 func TestModelAndConfigurationSurface(t *testing.T) {
 	for _, model := range []string{"--model", "model --flag", "model\nflag", "model\x00", strings.Repeat("a", 129)} {
-		if _, err := NewClaude(TrustedClaudeConfig{VersionOutput: "2.1.300 (Claude Code)", Model: model}); !errors.Is(err, ErrInvalid) {
+		if _, err := NewClaude(TrustedClaudeConfig{VersionOutput: "2.1.306 (Claude Code)", Model: model}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("accepted invalid model %q", model)
 		}
 	}
