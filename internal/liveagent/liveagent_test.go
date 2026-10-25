@@ -2,6 +2,7 @@ package liveagent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -76,11 +77,11 @@ func TestOpenCodePlannerFixedCommandAndGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := p.Plan(agentadapter.Request{Goal: "Reply exactly PULSAR_OPENCODE_OK", MCPConfigPath: OpenCodeConfig, MaxBudgetUSD: 1})
+	r, err := p.Plan(agentadapter.Request{Goal: "Reply exactly PULSAR_OPENCODE_OK", MCPConfigPath: agentadapter.GuestMCPConfigPath, MaxBudgetUSD: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.User != "agent" || len(r.Command) != 8 || r.Command[0] != OpenCodeLauncher || r.Command[1] != "run" || r.Command[2] != "--config" || r.Command[3] != OpenCodeConfig || r.Command[4] != "--model" || r.Command[5] != OpenCodeModel || r.Command[6] != "--" || r.Command[7] != "Reply exactly PULSAR_OPENCODE_OK" {
+	if r.User != "agent" || len(r.Command) != 3 || r.Command[0] != OpenCodeLauncher || r.Command[1] != "run" || r.Command[2] != "Reply exactly PULSAR_OPENCODE_OK" {
 		t.Fatalf("unexpected request: %#v", r)
 	}
 	for _, arg := range r.Command {
@@ -95,22 +96,32 @@ func TestOpenCodePlannerRejectsInjectedGoalAndPath(t *testing.T) {
 	if _, err := p.Plan(agentadapter.Request{Goal: "x\n--unsafe", MCPConfigPath: OpenCodeConfig, MaxBudgetUSD: 1}); err == nil {
 		t.Fatal("newline goal accepted")
 	}
-	if _, err := p.Plan(agentadapter.Request{Goal: "x", MCPConfigPath: ClaudeConfig, MaxBudgetUSD: 1}); err == nil {
-		t.Fatal("wrong config accepted")
+	if _, err := p.Plan(agentadapter.Request{Goal: "x", MCPConfigPath: OpenCodeConfig, MaxBudgetUSD: 1}); err == nil {
+		t.Fatal("provider config path accepted as MCP path")
+	}
+}
+
+func TestCodexPlannerFixedCommandAndGoal(t *testing.T) {
+	p, _, err := Components(CodexID, fakeBackend{}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.Plan(agentadapter.Request{Goal: "Reply exactly PULSAR_CODEX_OK", MCPConfigPath: agentadapter.GuestMCPConfigPath, MaxBudgetUSD: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.User != "agent" || len(r.Command) != 6 || r.Command[0] != "sh" || r.Command[1] != "-c" || r.Command[3] != "pulsar-codex" || r.Command[5] != CodexLauncher {
+		t.Fatalf("unexpected request: %#v", r)
+	}
+	for _, arg := range r.Command {
+		if arg == "--dangerously-bypass-approvals-and-sandbox" || strings.Contains(arg, "token") {
+			t.Fatal("unsafe flag or credential injected")
+		}
 	}
 }
 
 func TestUnsupportedAgentsFailClosed(t *testing.T) {
-	for _, id := range []string{"codex"} {
-		p, v, err := Components(id, fakeBackend{}, t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := p.Plan(agentadapter.Request{Goal: "x", MCPConfigPath: ClaudeConfig, MaxBudgetUSD: 1}); err == nil {
-			t.Fatalf("%s planner unexpectedly ready", id)
-		}
-		if err := v.Verify(context.Background(), runtime.Environment{ID: "id", Backend: "fake", Agent: id}); err == nil {
-			t.Fatalf("%s verifier unexpectedly ready", id)
-		}
+	if _, _, err := Components("other", fakeBackend{}, t.TempDir()); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unknown agent error=%v", err)
 	}
 }

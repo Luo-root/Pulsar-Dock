@@ -30,6 +30,14 @@ type GuestVerifier interface {
 	Verify(context.Context, runtime.Environment) error
 }
 
+// GuestCleanup is optional lifecycle cleanup for verifier-owned guest resources
+// such as scoped model proxy listeners. It is invoked after execution admission
+// ends and must be idempotent.
+type GuestCleanup interface {
+	Cleanup(context.Context, runtime.Environment) error
+	Close() error
+}
+
 // ExecutionConfig is immutable host configuration. No execution is available
 // through New alone. The host must provision and verify a compatible guest.
 type ExecutionConfig struct {
@@ -106,6 +114,11 @@ func (s *Service) ExecuteTask(ctx context.Context, rootID, taskID string) (Execu
 	release()
 	defer func() {
 		cancel()
+		if cleanup, ok := s.execution.Verifier.(GuestCleanup); ok {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = cleanup.Cleanup(cleanupCtx, env)
+			cleanupCancel()
+		}
 		s.mu.Lock()
 		delete(s.executions, taskID)
 		close(op.done)

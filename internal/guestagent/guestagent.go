@@ -28,11 +28,12 @@ type Package struct {
 	Member, GuestBinaryPath, ConfigRoot          string
 	BinarySHA256                                 string
 	VersionCommand                               []string
+	LauncherPath                                 string
 }
 
 var registry = map[string]Package{
 	"codex":    {AgentID: "codex", Version: "0.164.0", ArchivePath: "openai-codex-0.164.0-linux-x64.tgz", ArchiveSHA256: "62659fefd9a8efa21a496402fde3c11c025bbeee735a582968f8ffd14cb5f79c", BinarySHA256: "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306", Member: "package/vendor/x86_64-unknown-linux-musl/bin/codex", GuestBinaryPath: "/opt/pulsar-agents/codex", ConfigRoot: "/etc/pulsar-agents/codex", VersionCommand: []string{"--version"}},
-	"opencode": {AgentID: "opencode", Version: "1.19.4", ArchivePath: "opencode-linux-x64-1.19.4.tgz", ArchiveSHA256: "dca7b06bbb4e4a1ab3681b799cd328057b356d9399e8e47336cf53b7ae658d0d", BinarySHA256: "538fcb1b6408c8d4608822acee19f7ff5b3a3eb3383c0633c4f06170857312a7", Member: "package/bin/opencode", GuestBinaryPath: "/opt/pulsar-agents/opencode", ConfigRoot: "/etc/pulsar-agents/opencode", VersionCommand: []string{"--version"}},
+	"opencode": {AgentID: "opencode", Version: "1.19.4", ArchivePath: "opencode-linux-x64-1.19.4.tgz", ArchiveSHA256: "dca7b06bbb4e4a1ab3681b799cd328057b356d9399e8e47336cf53b7ae658d0d", BinarySHA256: "538fcb1b6408c8d4608822acee19f7ff5b3a3eb3383c0633c4f06170857312a7", Member: "package/bin/opencode", GuestBinaryPath: "/opt/pulsar-agents/opencode", ConfigRoot: "/etc/pulsar-agents/opencode", VersionCommand: []string{"--version"}, LauncherPath: "/opt/pulsar-agents/opencode-launcher"},
 }
 
 func Lookup(agent string) (Package, bool) {

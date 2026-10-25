@@ -49,6 +49,7 @@ type Server struct {
 	closeErr      error
 	done          chan struct{}
 	bootstrapInfo os.FileInfo
+	cleanups      []controller.GuestCleanup
 }
 
 func main() {
@@ -135,6 +136,7 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 		return nil, errors.New("live agent runtime unavailable")
 	}
 	facades := make(map[string]*desktopapi.Facade, 3)
+	var cleanups []controller.GuestCleanup
 	for _, def := range liveagent.Definitions() {
 		planner, verifier, e := liveagent.Components(def.ID, backend, staging)
 		if e != nil {
@@ -157,12 +159,15 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 			return nil, errors.New("desktop facade unavailable")
 		}
 		facades[def.ID] = f
+		if cleanup, ok := verifier.(controller.GuestCleanup); ok {
+			cleanups = append(cleanups, cleanup)
+		}
 	}
 	h, err := factory(facades, desktopapi.HTTPConfig{Token: bootstrap.Token, AllowedHosts: []string{ln.Addr().String()}, AllowedOrigins: []string{origin}, MaxBodyBytes: 1 << 20})
 	if err != nil || h == nil {
 		return nil, errors.New("desktop HTTP transport unavailable")
 	}
-	s := &Server{HTTP: &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}, Listener: ln, BootstrapPath: bootstrapPath, Store: store, Backend: backend}
+	s := &Server{HTTP: &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}, Listener: ln, BootstrapPath: bootstrapPath, Store: store, Backend: backend, cleanups: cleanups}
 	s.bootstrapInfo, err = os.Lstat(bootstrapPath)
 	if err != nil {
 		return nil, errors.New("bootstrap identity unavailable")
@@ -188,6 +193,9 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 func (s *Server) Serve() error { return s.HTTP.Serve(s.Listener) }
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		for _, cleanup := range s.cleanups {
+			_ = cleanup.Close()
+		}
 		if s.done != nil {
 			close(s.done)
 		}
