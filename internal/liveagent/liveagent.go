@@ -249,7 +249,7 @@ func (OpenCodePlanner) Plan(r agentadapter.Request) (runtime.ExecRequest, error)
 		return runtime.ExecRequest{}, errors.New("invalid OpenCode execution request")
 	}
 	return runtime.ExecRequest{User: "agent", Command: []string{
-		OpenCodeCLIPath, "run", "--config", OpenCodeConfig, "--model", OpenCodeModel, "--", r.Goal,
+		OpenCodeLauncher, "run", "--config", OpenCodeConfig, "--model", OpenCodeModel, "--", r.Goal,
 	}}, nil
 }
 

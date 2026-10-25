@@ -80,7 +80,7 @@ func TestOpenCodePlannerFixedCommandAndGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.User != "agent" || len(r.Command) != 8 || r.Command[0] != OpenCodeCLIPath || r.Command[1] != "run" || r.Command[2] != "--config" || r.Command[3] != OpenCodeConfig || r.Command[4] != "--model" || r.Command[5] != OpenCodeModel || r.Command[6] != "--" || r.Command[7] != "Reply exactly PULSAR_OPENCODE_OK" {
+	if r.User != "agent" || len(r.Command) != 8 || r.Command[0] != OpenCodeLauncher || r.Command[1] != "run" || r.Command[2] != "--config" || r.Command[3] != OpenCodeConfig || r.Command[4] != "--model" || r.Command[5] != OpenCodeModel || r.Command[6] != "--" || r.Command[7] != "Reply exactly PULSAR_OPENCODE_OK" {
 		t.Fatalf("unexpected request: %#v", r)
 	}
 	for _, arg := range r.Command {
