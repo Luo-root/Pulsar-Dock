@@ -1,6 +1,7 @@
 package desktopapi
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -58,7 +59,7 @@ type httpHandler struct {
 }
 
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL == nil || r.URL.RawPath != "" || len(r.URL.Query()) != 0 {
+	if r.URL == nil || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery {
 		h.writeError(w, http.StatusBadRequest, ErrInvalid)
 		return
 	}
@@ -178,7 +179,11 @@ func (h *httpHandler) decode(r *http.Request, dst any) error {
 	if r.ContentLength > h.cfg.MaxBodyBytes {
 		return ErrInvalid
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, h.cfg.MaxBodyBytes+1))
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.cfg.MaxBodyBytes+1))
+	if err != nil || int64(len(body)) > h.cfg.MaxBodyBytes {
+		return ErrInvalid
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return ErrInvalid

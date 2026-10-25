@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Luo-root/pulsar-dock/internal/agentadapter"
@@ -105,6 +106,8 @@ func TestHTTPRoutesAuthCSRFAndStrictJSON(t *testing.T) {
 	}{
 		{"missing token", httpReq("GET", "http://127.0.0.1:4123/api/agents", "", nil), 401},
 		{"query token rejected", httpReq("GET", "http://127.0.0.1:4123/api/agents?token=test-random-token", "", nil), 400},
+		{"malformed query rejected", httpReq("GET", "http://127.0.0.1:4123/api/agents?%ZZ", "test-random-token", nil), 400},
+		{"empty query rejected", httpReq("GET", "http://127.0.0.1:4123/api/agents?", "test-random-token", nil), 400},
 		{"bad host", func() *http.Request {
 			r := httpReq("GET", "http://evil/api/agents", "test-random-token", nil)
 			r.Host = "evil"
@@ -141,6 +144,29 @@ func TestHTTPRoutesAuthCSRFAndStrictJSON(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("agents=%d", w.Code)
+	}
+}
+
+func TestHTTPChunkedBodyLimitRejectsWithoutCreate(t *testing.T) {
+	f, _ := openFacade(t, "alice")
+	h, err := NewHTTPHandler(map[string]*Facade{"claude": f}, HTTPConfig{Token: "token", AllowedHosts: []string{"127.0.0.1:4123"}, MaxBodyBytes: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"goal":"chunked","idempotencyKey":"chunked"}`
+	body := valid + strings.Repeat(" ", 128-len(valid)+1) + `{}`
+	r := httpReq("POST", "http://127.0.0.1:4123/api/agents/claude/tasks", "token", []byte(body))
+	r.ContentLength = -1
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized chunked code=%d body=%s", w.Code, w.Body.String())
+	}
+	r = httpReq("POST", "http://127.0.0.1:4123/api/agents/claude/tasks", "token", []byte(valid))
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("oversized request created a task or valid retry failed: code=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
