@@ -37,7 +37,7 @@ type Config struct {
 	Timeout          time.Duration
 }
 
-// Proxy only forwards /v1/messages and /v1/chat/completions POST requests.
+// Proxy only forwards fixed provider POST routes: Anthropic Messages, OpenAI-compatible Chat Completions, and Responses.
 // It has no listener, credential discovery, logging or administration endpoints.
 type Proxy struct {
 	origin        string
@@ -146,7 +146,7 @@ func validGuestAuth(r *http.Request, expected [32]byte) bool {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/chat/completions") || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.Fragment != "" || r.URL.IsAbs() || r.URL.Host != "" || (r.RequestURI != "" && r.RequestURI != r.URL.Path) {
+	if r.Method != http.MethodPost || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/v1/responses") || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.Fragment != "" || r.URL.IsAbs() || r.URL.Host != "" || (r.RequestURI != "" && r.RequestURI != r.URL.Path) {
 		reject(w, http.StatusNotFound, "route_not_allowed")
 		return
 	}
