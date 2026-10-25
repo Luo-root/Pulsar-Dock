@@ -21,6 +21,7 @@ import (
 
 	"github.com/Luo-root/pulsar-dock/internal/controller"
 	"github.com/Luo-root/pulsar-dock/internal/desktopapi"
+	"github.com/Luo-root/pulsar-dock/internal/liveagent"
 	"github.com/Luo-root/pulsar-dock/internal/runtime"
 	"github.com/Luo-root/pulsar-dock/internal/taskstore"
 )
@@ -130,19 +131,32 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 		}
 	}()
 	backend := runtime.NewSbxBackend(nil, staging)
+	if err := liveagent.StartupCheck(ctx, backend); err != nil {
+		return nil, errors.New("live agent runtime unavailable")
+	}
 	facades := make(map[string]*desktopapi.Facade, 3)
-	for _, agent := range []string{"claude", "codex", "opencode"} {
-		service, e := controller.New(store, backend, "desktop-"+agent, controller.Policy{
-			Agent: agent, TemplateRef: runtime.SbxTemplate, Memory: "2g", CPUs: 2,
-		})
+	for _, def := range liveagent.Definitions() {
+		planner, verifier, e := liveagent.Components(def.ID, backend)
+		if e != nil {
+			return nil, errors.New("agent components unavailable")
+		}
+		service, e := controller.NewWithExecution(store, backend, "desktop-"+def.ID, controller.Policy{
+			Agent: def.ID, TemplateRef: runtime.SbxTemplate, Memory: "2g", CPUs: 2,
+		}, controller.ExecutionConfig{Planner: planner, Verifier: verifier, MaxBudgetUSD: 1})
 		if e != nil {
 			return nil, errors.New("controller unavailable")
 		}
-		f, e := desktopapi.New(service, store, "desktop-"+agent, agent, []desktopapi.AgentConfig{{ID: agent, DisplayName: agent, Installed: false, CLIVerified: false, ModelVerified: false, Operations: nil}})
+		ops := []desktopapi.Operation{desktopapi.OperationCreate}
+		if def.CLIVerified && def.ModelVerified {
+			ops = append(ops, desktopapi.OperationExecute)
+		}
+		f, e := desktopapi.New(service, store, "desktop-"+def.ID, def.ID, []desktopapi.AgentConfig{{
+			ID: def.ID, DisplayName: def.DisplayName, Installed: def.Installed, CLIVerified: def.CLIVerified, ModelVerified: def.ModelVerified, Operations: ops,
+		}})
 		if e != nil {
 			return nil, errors.New("desktop facade unavailable")
 		}
-		facades[agent] = f
+		facades[def.ID] = f
 	}
 	h, err := factory(facades, desktopapi.HTTPConfig{Token: bootstrap.Token, AllowedHosts: []string{ln.Addr().String()}, AllowedOrigins: []string{origin}, MaxBodyBytes: 1 << 20})
 	if err != nil || h == nil {
