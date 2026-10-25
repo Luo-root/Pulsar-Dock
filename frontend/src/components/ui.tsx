@@ -5,6 +5,7 @@ import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { ChevronDown } from 'lucide-react';
 
 export const cn = (...values: ClassValue[]) => twMerge(clsx(values));
 
@@ -29,15 +30,16 @@ export const DialogClose = DialogPrimitive.Close;
 export const DialogTitle = DialogPrimitive.Title;
 export const DialogDescription = DialogPrimitive.Description;
 
-export function DialogContent({ children, className, onCloseAutoFocus }: {
+export function DialogContent({ children, className, onOpenAutoFocus, onCloseAutoFocus }: {
   children: ReactNode;
   className?: string;
+  onOpenAutoFocus?: (event: Event) => void;
   onCloseAutoFocus?: (event: Event) => void;
 }) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="dialog-overlay" />
-      <DialogPrimitive.Content className={cn('dialog-content', className)} onCloseAutoFocus={onCloseAutoFocus}>
+      <DialogPrimitive.Content className={cn('dialog-content', className)} onOpenAutoFocus={onOpenAutoFocus} onCloseAutoFocus={onCloseAutoFocus}>
         {children}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
@@ -57,7 +59,7 @@ export function Choice({ label, value, options, onChange, disabled = false }: {
         <Button className="choice" aria-label={`${label}：${value}`} disabled={disabled}>
           <span className="choice-label">{label}</span>
           <span className="choice-value">{value}</span>
-          <span aria-hidden="true">⌄</span>
+          <ChevronDown className="choice-chevron" size={12} aria-hidden="true" />
         </Button>
       </DropdownPrimitive.Trigger>
       <DropdownPrimitive.Portal>

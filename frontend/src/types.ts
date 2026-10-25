@@ -1,11 +1,12 @@
 import type { ThreadMessageLike } from '@assistant-ui/react';
 
-export type Page = 'home' | 'conversation' | 'agents' | 'connections' | 'workflow' | 'artifacts';
+export type Page = 'home' | 'conversation' | 'agents' | 'workflow' | 'artifacts';
+export type AgentKind = 'Claude Code' | 'Codex' | 'DSH';
 export type RunMode = 'direct' | 'workflow' | 'auto';
 export type WorkspaceTab = 'resources' | 'artifacts' | 'permissions' | 'workflow';
 
 export interface SessionConfig {
-  agent: string;
+  agent: AgentKind;
   model: string;
   approval: string;
   collaboration: string;

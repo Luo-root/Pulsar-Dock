@@ -1,12 +1,12 @@
 import { useRef } from 'react';
 import {
-  ArrowRight, Bot, Box, CircleDashed, Clock3, Cloud, Code2,
-  FileCheck2, FileText, GitBranch, Library, LockKeyhole, Network, PackageOpen,
-  Route, ShieldCheck, Sparkles, SquareTerminal, Workflow,
+  ArrowRight, Bot, Box, CircleDashed, Clock3, FileCheck2, FileText, GitBranch,
+  Library, PackageOpen, Route, ShieldCheck, Workflow,
 } from 'lucide-react';
 import type { Snapshot, TaskState } from '../bridge';
 import { agentOptions } from '../data';
-import type { Page, SessionConfig } from '../types';
+import type { AgentKind, Page, SessionConfig } from '../types';
+import { BrandIcon } from './BrandIcon';
 import { Button, Choice } from './ui';
 
 export const stateLabels: Record<TaskState, string> = {
@@ -14,23 +14,18 @@ export const stateLabels: Record<TaskState, string> = {
   stopping: '停止中', succeeded: '已完成', failed: '失败', stopped: '已停止', expired: '已到期',
 };
 
-function AgentGlyph({ name }: { name: string }) {
-  if (name === 'Codex') return <Code2 size={22} />;
-  if (name === 'DSH') return <SquareTerminal size={22} />;
-  return <Sparkles size={22} />;
-}
-
 function PageHeading({ eyebrow, title, description, badge }: { eyebrow: string; title: string; description: string; badge?: string }) {
   return <header className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{badge && <span className="preview-badge">{badge}</span>}</header>;
 }
 
-export function WorkflowGraph({ compact = false }: { compact?: boolean }) {
-  const nodes = [
+export function WorkflowGraph({ compact = false, template = '需求 → 实现 → 审查 → 交付' }: { compact?: boolean; template?: string }) {
+  const allNodes = [
     { icon: FileText, title: '需求输入', detail: '目标、项目与权限摘要' },
     { icon: Bot, title: 'Agent 实现', detail: '独立工作区 · 未执行' },
     { icon: ShieldCheck, title: '独立审查', detail: '固定快照 · 未创建协作者' },
     { icon: PackageOpen, title: '成果交付', detail: '差异与证据 · 未生成' },
   ];
+  const nodes = template === '轻量实现 → 独立审查' ? allNodes.slice(0, 3) : allNodes;
   return (
     <div className={`workflow-graph ${compact ? 'is-compact' : ''}`} aria-label="静态工作流预览">
       {nodes.map(({ icon: NodeIcon, title, detail }, index) => (
@@ -43,34 +38,18 @@ export function WorkflowGraph({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function AgentsPage({ onUseAgent }: { onUseAgent: (agent: string) => void }) {
+function AgentsPage({ onUseAgent }: { onUseAgent: (agent: AgentKind) => void }) {
   return (
     <div className="management-page"><PageHeading eyebrow="AGENT REGISTRY" title="Agent" description="为会话选择合适的 Agent。真实版本与能力只由可信主机报告。" badge="能力未检测" />
-      <div className="agent-grid">{agentOptions.map(agent => <article className="agent-card" key={agent.name}><div className="agent-card-top"><span className="agent-card-icon"><AgentGlyph name={agent.name} /></span><span className="status-pill"><CircleDashed size={12} />未检测</span></div><h2>{agent.name}</h2><p>{agent.description}</p><div className="agent-card-footer"><span>不会在此安装或启动</span><Button variant="outline" onClick={() => onUseAgent(agent.name)}>用于本地预览 <ArrowRight size={13} /></Button></div></article>)}</div>
+      <div className="agent-grid">{agentOptions.map(agent => <article className="agent-card" key={agent.name}><div className="agent-card-top"><span className="agent-card-icon"><BrandIcon name={agent.name} size={22} /></span><span className="status-pill"><CircleDashed size={12} />未检测</span></div><h2>{agent.name}</h2><p>{agent.description}</p><div className="agent-card-footer"><span>不会在此安装或启动</span><Button variant="outline" onClick={() => onUseAgent(agent.name)}>用于本地预览 <ArrowRight size={13} /></Button></div></article>)}</div>
       <section className="info-section"><Bot size={18} /><div><h2>适配器不是运行保证</h2><p>界面选择只改变本地预览配置。安装状态、模型协议、MCP、会话恢复和工具事件需要在对应版本实测后才能显示。</p></div></section>
-    </div>
-  );
-}
-
-function ConnectionsPage({ snapshot, actionReason }: { snapshot: Snapshot; actionReason: string }) {
-  const connected = snapshot.connection === 'connected';
-  const connections = [
-    { icon: Cloud, title: '模型服务', description: '连接协议兼容的模型入口，凭据只留在可信控制面。' },
-    { icon: GitBranch, title: 'Magpie', description: '复用已有模型与配置能力，不复制上游密钥到任务目录。' },
-    { icon: Network, title: 'MCP 工具', description: '只向 Agent 暴露经过授权的受控工具入口。' },
-  ];
-  return (
-    <div className="management-page"><PageHeading eyebrow="TRUSTED CONNECTIONS" title="连接中心" description="在一个可信位置查看模型、Magpie 与工具连接，不在聊天中填写密钥。" badge={connected ? '主机已连接 · 只读' : '主机未连接'} />
-      <div className="connection-grid">{connections.map(({ icon: ConnectionIcon, title, description }) => <article className="connection-card" key={title}><div className="connection-card-heading"><span className="connection-icon"><ConnectionIcon size={20} /></span><span className={`status-pill ${connected ? 'is-connected' : ''}`}><span className="status-dot" />{connected ? '等待连接详情' : '未连接'}</span></div><h2>{title}</h2><p>{description}</p><Button variant="outline" disabled aria-describedby="connection-action-reason">检查连接</Button></article>)}</div>
-      <p className="action-reason" id="connection-action-reason">{actionReason}</p>
-      <section className="info-section"><LockKeyhole size={18} /><div><h2>凭据边界保持不变</h2><p>当前界面没有凭据输入、连接测试或管理操作桥。真实密钥不得进入聊天、任务快照、示例内容或普通日志。</p></div></section>
     </div>
   );
 }
 
 function WorkflowPage({ config, onConfig }: { config: SessionConfig; onConfig: (patch: Partial<SessionConfig>) => void }) {
   const modes: { value: SessionConfig['mode']; label: string }[] = [
-    { value: 'direct', label: 'Direct' },
+    { value: 'direct', label: '对话' },
     { value: 'workflow', label: '工作流' },
     { value: 'auto', label: 'AUTO' },
   ];
@@ -93,7 +72,7 @@ function WorkflowPage({ config, onConfig }: { config: SessionConfig; onConfig: (
   } as const;
   return (
     <div className="management-page">
-      <PageHeading eyebrow="RUN MODES" title="运行模式" description="保留 Direct、工作流与 AUTO 的统一入口。当前只展示界面与配置，不执行流程。" badge="静态 UI · 未接执行引擎" />
+      <PageHeading eyebrow="RUN MODES" title="运行模式" description="保留对话、工作流与 AUTO 的统一入口。当前只展示界面与配置，不执行流程。" badge="静态 UI · 未接执行引擎" />
       <div className="management-tabs" role="tablist" aria-label="运行模式设置">
         {modes.map((mode, index) => (
           <button
@@ -110,18 +89,19 @@ function WorkflowPage({ config, onConfig }: { config: SessionConfig; onConfig: (
           >{mode.label}</button>
         ))}
       </div>
-      {config.mode === 'direct' && <section {...panelProps} className="mode-settings"><div className="mode-settings-heading"><Bot size={19} /><div><h2>Direct</h2><p>由一个选定 Agent 处理会话。协作者仍需遵循任务授权与独立环境边界。</p></div></div><Choice label="默认 Agent" value={config.agent} options={agentOptions.map(item => item.name)} onChange={agent => onConfig({ agent })} /><p className="muted">此处只保存当前本地预览的选择，不探测或启动 Agent。</p></section>}
+      {config.mode === 'direct' && <section {...panelProps} className="mode-settings"><div className="mode-settings-heading"><Bot size={19} /><div><h2>对话</h2><p>由一个选定 Agent 处理会话。协作者仍需遵循任务授权与独立环境边界。</p></div></div><Choice label="默认 Agent" value={config.agent} options={agentOptions.map(item => item.name)} onChange={agent => { const selected = agentOptions.find(item => item.name === agent); if (selected) onConfig({ agent: selected.name }); }} /><p className="muted">此处只保存当前本地预览的选择，不探测或启动 Agent。</p></section>}
       {config.mode === 'auto' && <section {...panelProps} className="mode-settings"><div className="mode-settings-heading"><Route size={19} /><div><h2>AUTO</h2><p>为未来的自动角色与流程选择预留目标输入。当前没有自动路由或模型调用。</p></div></div><label className="field-label" htmlFor="management-goal">全局 Goal</label><input id="management-goal" className="text-field" value={config.goal} onChange={event => onConfig({ goal: event.target.value })} placeholder="输入一个仅用于界面预览的目标" /><p className="muted">目标只保留在当前窗口内存，刷新后清空。</p></section>}
-      {config.mode === 'workflow' && <section {...panelProps} className="workflow-editor"><div className="workflow-editor-top"><div><h2>需求 → 实现 → 审查 → 交付</h2><p>一个适合 Pulsar Dock 安全协作边界的静态模板。</p></div><Choice label="工作流模板" value={config.workflow} options={['需求 → 实现 → 审查 → 交付', '轻量实现 → 独立审查']} onChange={workflow => onConfig({ workflow })} /></div><div className="workflow-canvas"><div className="canvas-grid" /><WorkflowGraph /></div><div className="workflow-notes"><span><Workflow size={14} />UI 模板已保留</span><span><Clock3 size={14} />执行与恢复未接入</span></div></section>}
+      {config.mode === 'workflow' && <section {...panelProps} className="workflow-editor"><div className="workflow-editor-top"><div><h2>{config.workflow}</h2><p>{config.workflow === '轻量实现 → 独立审查' ? '保留输入、实现和独立审查的轻量静态模板。' : '一个适合 Pulsar Dock 安全协作边界的静态模板。'}</p></div><Choice label="工作流模板" value={config.workflow} options={['需求 → 实现 → 审查 → 交付', '轻量实现 → 独立审查']} onChange={workflow => onConfig({ workflow })} /></div><div className="workflow-canvas"><div className="canvas-grid" /><WorkflowGraph template={config.workflow} /></div><div className="workflow-notes"><span><Workflow size={14} />UI 模板已保留</span><span><Clock3 size={14} />执行与恢复未接入</span></div></section>}
       <section className="info-section"><Box size={18} /><div><h2>后续执行层</h2><p>Pulse 可承载数据依赖、节点状态与单进程执行；Pulse Durable 可承接检查点存储和恢复。本轮没有引入、配置或验证这两个执行库，也没有把静态节点图当成真实运行。</p></div></section>
     </div>
   );
 }
 
 function ArtifactsPage({ snapshot, actionReason }: { snapshot: Snapshot; actionReason: string }) {
+  const waiting = snapshot.tasks.filter(task => task.state === 'waiting_approval');
   return (
     <div className="management-page"><PageHeading eyebrow="REVIEW & ARTIFACTS" title="审批与成果" description="审批具体权限，检查不可变成果，再由用户明确决定是否应用。" badge="只读" />
-      <section className="approval-section"><div className="section-heading"><h2>待处理审批</h2><span className="count-badge">0</span></div><div className="empty-block"><ShieldCheck size={25} /><h3>没有待处理审批</h3><p>当前只读接口没有提供审批请求。没有记录不等于已经授权。</p></div></section>
+      <section className="approval-section"><div className="section-heading"><h2>待处理审批</h2><span className="count-badge">{waiting.length}</span></div>{waiting.length ? <ul className="artifact-list">{waiting.map(task => <li key={task.id}><ShieldCheck size={18} /><div><strong>{task.title}</strong><span>{task.id} · 等待审批</span><code>主机只报告等待状态，审批参数与对象未提供。</code></div><Button variant="outline" disabled>审批详情未提供</Button></li>)}</ul> : <div className="empty-block"><ShieldCheck size={25} /><h3>没有待处理审批</h3><p>当前主机快照没有等待审批的任务。没有记录不等于已经授权。</p></div>}</section>
       <section className="artifact-section"><div className="section-heading"><h2>主机成果</h2><span className="count-badge">{snapshot.artifacts.length}</span></div>{snapshot.artifacts.length ? <ul className="artifact-list">{snapshot.artifacts.map(artifact => <li key={artifact.id}><FileCheck2 size={18} /><div><strong>{artifact.name}</strong><span>{artifact.taskId}</span><code>SHA-256 {artifact.digest}</code></div><Button variant="outline" disabled aria-describedby="artifact-action-reason">应用成果</Button></li>)}</ul> : <div className="empty-block"><PackageOpen size={25} /><h3>尚无主机成果</h3><p>成果由主机提供不可变引用后显示。任务完成不代表改动已应用。</p></div>}</section>
       <p className="action-reason" id="artifact-action-reason">{actionReason}</p>
     </div>
@@ -133,11 +113,10 @@ export function ManagementPage({ page, snapshot, config, onConfig, onUseAgent, a
   snapshot: Snapshot;
   config: SessionConfig;
   onConfig: (patch: Partial<SessionConfig>) => void;
-  onUseAgent: (agent: string) => void;
+  onUseAgent: (agent: AgentKind) => void;
   actionReason: string;
 }) {
   if (page === 'agents') return <AgentsPage onUseAgent={onUseAgent} />;
-  if (page === 'connections') return <ConnectionsPage snapshot={snapshot} actionReason={actionReason} />;
   if (page === 'workflow') return <WorkflowPage config={config} onConfig={onConfig} />;
   return <ArtifactsPage snapshot={snapshot} actionReason={actionReason} />;
 }

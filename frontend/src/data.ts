@@ -1,4 +1,4 @@
-import type { Conversation, SessionConfig } from './types';
+import type { AgentKind, Conversation, SessionConfig } from './types';
 
 export const defaultConfig: SessionConfig = {
   agent: 'Claude Code',
@@ -39,7 +39,7 @@ export const demoConversation: Conversation = {
   ],
 };
 
-export const agentOptions = [
+export const agentOptions: { name: AgentKind; description: string }[] = [
   { name: 'Claude Code', description: '目标适配器 · 原生会话与工具事件由主机能力报告决定' },
   { name: 'Codex', description: '目标适配器 · 版本、恢复与事件能力需要逐项实测' },
   { name: 'DSH', description: '目标适配器 · 受控 Web 入口与生命周期仍待接入' },

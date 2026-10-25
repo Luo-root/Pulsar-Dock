@@ -3,12 +3,13 @@ import { Menu, PanelRightOpen } from 'lucide-react';
 import { disconnectedBridge, disconnectedSnapshot, parseSnapshot, type HostBridge, type Snapshot } from './bridge';
 import { Chat } from './components/Chat';
 import { HostConversation, ManagementPage } from './components/Pages';
+import { SearchDialog } from './components/SearchDialog';
 import { SettingsDialog, type SettingsTab } from './components/SettingsDialog';
 import { Sidebar } from './components/Sidebar';
 import { Button, Hint } from './components/ui';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { createConversation, defaultConfig, demoConversation } from './data';
-import type { Conversation, Page, Preferences, SessionConfig, WorkspaceTab } from './types';
+import type { AgentKind, Conversation, Page, Preferences, SessionConfig, WorkspaceTab } from './types';
 import './styles.css';
 
 const unavailable = '当前仅提供只读状态接口，未接入可信操作桥；不能创建、启动、停止、撤权或应用成果。';
@@ -24,6 +25,18 @@ function loadPreferences(): Preferences {
   return defaultPreferences;
 }
 
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, [query]);
+  return matches;
+}
+
 export default function App({ bridge = disconnectedBridge }: { bridge?: HostBridge }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(disconnectedSnapshot);
   const [error, setError] = useState('');
@@ -32,15 +45,20 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   const [selectedId, setSelectedId] = useState('draft-1');
   const [hostTaskId, setHostTaskId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [moreOpen, setMoreOpen] = useState(false);
   const [preferences, setPreferences] = useState<Preferences>(loadPreferences);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('resources');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('通用');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const mobile = useMediaQuery('(max-width: 760px)');
   const counter = useRef(1);
   const settingsReturnFocus = useRef<HTMLElement | null>(null);
+  const searchReturnFocus = useRef<HTMLElement | null>(null);
+  const mobileReturnFocus = useRef<HTMLElement | null>(null);
+  const mobileWasOpen = useRef(false);
+  const sidebarRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -93,6 +111,32 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
     }
   }, [hostTaskId, snapshot.tasks]);
 
+  useEffect(() => {
+    if (!mobile && mobileOpen) setMobileOpen(false);
+  }, [mobile, mobileOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) {
+      if (mobileWasOpen.current) {
+        mobileWasOpen.current = false;
+        mobileReturnFocus.current?.focus();
+      }
+      return;
+    }
+    mobileWasOpen.current = true;
+    const frame = requestAnimationFrame(() => sidebarRef.current?.querySelector<HTMLElement>('button')?.focus());
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setMobileOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [mobileOpen]);
+
   const current = conversations.find(item => item.id === selectedId) ?? conversations[0];
   const hostTask = snapshot.tasks.find(item => item.id === hostTaskId);
   const chatVisible = page === 'home' || page === 'conversation';
@@ -105,7 +149,7 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   };
   const updatePreferences = (patch: Partial<Preferences>) => setPreferences(value => ({ ...value, ...patch }));
 
-  const quickChat = (agent?: string) => {
+  const quickChat = (agent?: AgentKind) => {
     setHostTaskId(null);
     setMobileOpen(false);
     if (!agent && page === 'home' && !current.demo && !current.messages.length) {
@@ -156,8 +200,27 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   const openSettings = (tab: SettingsTab = '通用') => {
     settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSettingsTab(tab);
+    setSearchOpen(false);
+    setMobileOpen(false);
     setSettingsOpen(true);
   };
+  const openSearch = () => {
+    searchReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setQuery('');
+    setSettingsOpen(false);
+    setMobileOpen(false);
+    setSearchOpen(true);
+  };
+  useEffect(() => {
+    const keyboardSearch = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
+        event.preventDefault();
+        openSearch();
+      }
+    };
+    document.addEventListener('keydown', keyboardSearch);
+    return () => document.removeEventListener('keydown', keyboardSearch);
+  }, []);
   const openWorkspace = (tab: WorkspaceTab) => {
     setWorkspaceTab(tab);
     updatePreferences({ inspector: true });
@@ -166,30 +229,29 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   return (
     <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${preferences.compact ? 'compact' : ''}`} data-theme={preferences.theme}>
       <a className="skip" href="#main">跳到主内容</a>
-      {mobileOpen && <button className="mobile-overlay" aria-label="关闭导航" onClick={() => setMobileOpen(false)} />}
+      {mobile && mobileOpen && <button className="mobile-overlay" aria-label="关闭导航遮罩" onClick={() => setMobileOpen(false)} />}
       <div className="desktop">
         <Sidebar
           collapsed={sidebarCollapsed}
+          mobile={mobile}
           mobileOpen={mobileOpen}
+          sidebarRef={sidebarRef}
           page={page}
           conversations={conversations}
           selectedId={selectedId}
           hostTaskId={hostTaskId}
           snapshot={snapshot}
-          query={query}
-          moreOpen={moreOpen}
-          onQuery={setQuery}
-          onMore={() => setMoreOpen(value => !value)}
-          onCollapse={() => setSidebarCollapsed(value => !value)}
+          onCollapse={() => mobile ? setMobileOpen(false) : setSidebarCollapsed(value => !value)}
           onQuickChat={() => quickChat()}
+          onSearch={openSearch}
           onPage={selectPage}
           onConversation={selectConversation}
           onHostTask={id => { setHostTaskId(id); setPage('conversation'); setMobileOpen(false); }}
           onSettings={() => openSettings()}
         />
-        <section className="main-shell">
+        <section className="main-shell" inert={mobile && mobileOpen} aria-hidden={mobile && mobileOpen ? true : undefined}>
           <header className="topbar">
-            <div className="topbar-left"><Button size="icon" className="mobile-menu" aria-label="打开导航" onClick={() => setMobileOpen(true)}><Menu size={17} /></Button><span className="topbar-context">{hostTask ? '主机任务 · 只读' : page === 'home' ? '安全协作工作台' : page === 'conversation' ? '本地会话预览' : page === 'agents' ? 'Agent' : page === 'connections' ? '连接中心' : page === 'workflow' ? '运行模式' : '审批与成果'}</span></div>
+            <div className="topbar-left"><Button size="icon" className="mobile-menu" aria-label="打开导航" onClick={() => { mobileReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setMobileOpen(true); }}><Menu size={17} /></Button><span className="topbar-context">{hostTask ? '主机任务 · 只读' : page === 'home' ? '安全协作工作台' : page === 'conversation' ? '本地会话预览' : page === 'agents' ? 'Agent' : page === 'workflow' ? '运行模式' : '审批与成果'}</span></div>
             <div className="topbar-actions">
               <Button className="host-connection" onClick={() => openSettings('诊断')}><span className={`connection-dot ${snapshot.connection === 'connected' ? 'connected' : ''}`} />{snapshot.connection === 'connected' ? '主机已连接 · 只读' : '主机未连接'}</Button>
               {chatVisible && <Hint text={preferences.inspector ? '收起右侧工作区' : '展开右侧工作区'}><Button size="icon" className={preferences.inspector ? 'panel-active' : ''} aria-label={preferences.inspector ? '收起右侧工作区' : '展开右侧工作区'} aria-expanded={preferences.inspector} onClick={() => updatePreferences({ inspector: !preferences.inspector })}><PanelRightOpen size={16} /></Button></Hint>}
@@ -211,11 +273,12 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
                 />
               ) : <ManagementPage page={page} snapshot={snapshot} config={current.config} onConfig={updateConfig} onUseAgent={quickChat} actionReason={unavailable} />}
             </main>
-            {chatVisible && preferences.inspector && <WorkspacePanel current={current} task={hostTask} snapshot={snapshot} tab={workspaceTab} onTab={setWorkspaceTab} onClose={() => updatePreferences({ inspector: false })} />}
+            {chatVisible && preferences.inspector && <WorkspacePanel current={current} task={hostTask} snapshot={snapshot} tab={workspaceTab} onTab={setWorkspaceTab} />}
           </div>
         </section>
       </div>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} tab={settingsTab} onTab={setSettingsTab} snapshot={snapshot} preferences={preferences} onPreferences={updatePreferences} returnFocus={settingsReturnFocus.current} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} tab={settingsTab} onTab={setSettingsTab} snapshot={snapshot} preferences={preferences} onPreferences={updatePreferences} returnFocus={settingsReturnFocus.current} actionReason={unavailable} />
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} query={query} onQuery={setQuery} conversations={conversations} snapshot={snapshot} onConversation={selectConversation} onHostTask={id => { setHostTaskId(id); setPage('conversation'); }} returnFocus={searchReturnFocus.current} />
     </div>
   );
 }

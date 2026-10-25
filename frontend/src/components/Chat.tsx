@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime, type ThreadMessageLike } from '@assistant-ui/react';
 import {
-  ArrowUpRight, Bot, ChevronDown, Code2, FileText, Folder, GitBranch, Paperclip,
-  Route, Send, ShieldCheck, Sparkles, SquareTerminal, UserRound, Users, Wrench,
+  ArrowUpRight, Bot, ChevronDown, FileText, Folder, GitBranch, Paperclip,
+  Route, Send, ShieldCheck, UserRound, Users, Wrench,
 } from 'lucide-react';
+import { agentOptions } from '../data';
 import type { Conversation, RunMode, SessionConfig } from '../types';
+import { BrandIcon } from './BrandIcon';
 import { Button, Choice, Hint } from './ui';
 
 function UserMessage() {
@@ -39,8 +41,12 @@ const boundaries: [number, GreetingPeriod][] = [[300, 'dawn'], [540, 'morning'],
 
 function periodAt(date: Date): GreetingPeriod {
   const minute = date.getHours() * 60 + date.getMinutes();
-  if (minute < 300) return 'late';
-  return boundaries.find(([start]) => minute < start)?.[1] ?? 'late';
+  let period: GreetingPeriod = 'late';
+  for (const [start, candidate] of boundaries) {
+    if (minute < start) break;
+    period = candidate;
+  }
+  return period;
 }
 
 function untilNextPeriod(date: Date): number {
@@ -72,14 +78,8 @@ function ConversationGreeting() {
   return <h1 className="home-greeting">{greetingText[period]}</h1>;
 }
 
-function AgentGlyph({ name, size = 16 }: { name: string; size?: number }) {
-  if (name === 'Codex') return <Code2 size={size} />;
-  if (name === 'DSH') return <SquareTerminal size={size} />;
-  return <Sparkles size={size} />;
-}
-
 const modeLabels: { value: RunMode; label: string }[] = [
-  { value: 'direct', label: 'Direct' },
+  { value: 'direct', label: '对话' },
   { value: 'workflow', label: '工作流' },
   { value: 'auto', label: 'AUTO' },
 ];
@@ -162,9 +162,9 @@ function Composer({ conversation, home, onUpdate, onConfig, onOpenWorkflow }: {
           <div className="mode-panel" id="mode-panel" role="tabpanel" aria-labelledby={`mode-${config.mode}`}>
             {config.mode === 'direct' && (
               <div className="agent-row-select"><span className="control-label">选择 Agent</span><div className="agent-options">
-                {['Claude Code', 'Codex', 'DSH'].map(agent => (
+                {agentOptions.map(({ name: agent }) => (
                   <Button key={agent} className={`agent-pill ${config.agent === agent ? 'selected' : ''}`} aria-pressed={config.agent === agent} onClick={() => onConfig({ agent })}>
-                    <AgentGlyph name={agent} /><span>{agent}</span>
+                    <BrandIcon name={agent} size={16} /><span>{agent}</span>
                   </Button>
                 ))}
               </div></div>
@@ -213,7 +213,7 @@ export function Chat({ conversation, home, onUpdate, onConfig, onSend, onOpenWor
         ) : (
           <>
             <header className="conversation-header">
-              <div className="conversation-heading"><h1>{conversation.title}</h1><span className="agent-identity"><AgentGlyph name={conversation.config.agent} size={14} />{conversation.config.agent}</span><span className="session-id">{conversation.demo ? 'example-session' : 'local-draft'}</span></div>
+              <div className="conversation-heading"><h1>{conversation.title}</h1><span className="agent-identity"><BrandIcon name={conversation.config.agent} size={14} />{conversation.config.agent}</span><span className="session-id">{conversation.demo ? 'example-session' : 'local-draft'}</span></div>
               <span className="preview-badge">交互预览 · 未执行</span>
             </header>
             <ThreadPrimitive.Viewport className="thread-viewport">
