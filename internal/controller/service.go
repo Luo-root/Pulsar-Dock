@@ -53,11 +53,43 @@ type Service struct {
 	handles map[string]*ownedEnvironment
 	creates map[string]*creation
 	stops   map[string]chan struct{}
+	gates   map[string]chan struct{}
+}
+
+// gate serializes only one root's database admission/adoption. Waiting is
+// cancellable; the global mutex protects maps only, never store/backend IO.
+func (s *Service) gate(ctx context.Context, key string) (func(), error) {
+	s.mu.Lock()
+	if s.gates == nil {
+		s.gates = make(map[string]chan struct{})
+	}
+	g := s.gates[key]
+	if g == nil {
+		g = make(chan struct{}, 1)
+		s.gates[key] = g
+	}
+	s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case g <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-g
+			return nil, err
+		}
+		return func() { <-g }, nil
+	}
 }
 
 type ownedEnvironment struct {
-	env     runtime.Environment
-	removed bool
+	env runtime.Environment
+	// neverInvoked is an admission rejection; removed requires successful Remove.
+	// Neither set, with no ID, means an unknown Create outcome.
+	neverInvoked bool
+	removed      bool
 }
 
 type creation struct {
@@ -97,20 +129,31 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 	if strings.TrimSpace(r.Goal) == "" || strings.TrimSpace(r.IdempotencyKey) == "" {
 		return taskstore.Task{}, errors.New("goal and idempotency key required")
 	}
-	s.mu.Lock()
-	locked := true
+	key := parent
+	if key == "" {
+		key = "root-creation:" + r.IdempotencyKey
+	}
+	release, lockErr := s.gate(ctx, key)
+	if lockErr != nil {
+		return taskstore.Task{}, lockErr
+	}
+	unlock := func() {
+		if release != nil {
+			release()
+			release = nil
+		}
+	}
+	defer unlock()
 	var op *creation
 	var taskID string
 	defer func() {
-		if !locked {
-			s.mu.Lock()
-		}
 		if op != nil {
 			op.cancel()
+			s.mu.Lock()
 			delete(s.creates, taskID)
 			close(op.done)
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}()
 	scope := taskstore.Scope{CallerID: s.caller, RootID: parent}
 	// Capture existing IDs before insertion: Store intentionally returns no
@@ -160,17 +203,32 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 		return t, err
 	}
 	scope.RootID = t.RootID
+	if parent == "" {
+		rootRelease, err := s.gate(ctx, t.RootID)
+		if err != nil {
+			return t, err
+		}
+		requestRelease := release
+		release = func() { rootRelease(); requestRelease() }
+		// Adoption may have completed while this replay waited for the root gate.
+		if existing[t.ID] {
+			t, err = s.store.Get(ctx, scope, t.ID)
+			if err != nil {
+				return t, err
+			}
+		}
+	}
 	if existing[t.ID] {
-		if pending := s.creates[t.ID]; pending != nil {
-			s.mu.Unlock()
-			locked = false
+		s.mu.Lock()
+		pending := s.creates[t.ID]
+		s.mu.Unlock()
+		if pending != nil {
+			unlock()
 			select {
 			case <-ctx.Done():
 				return t, ctx.Err()
 			case <-pending.done:
 			}
-			s.mu.Lock()
-			locked = true
 			persisted, readErr := s.store.Get(ctx, scope, t.ID)
 			if readErr == nil && persisted.State == taskstore.Created {
 				readErr = ErrRecoveryRequired
@@ -194,10 +252,12 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 			if failErr == nil {
 				t = failed
 			}
+			s.mu.Lock()
 			if s.handles == nil {
 				s.handles = make(map[string]*ownedEnvironment)
 			}
-			s.handles[t.ID] = &ownedEnvironment{removed: true}
+			s.handles[t.ID] = &ownedEnvironment{neverInvoked: true}
+			s.mu.Unlock()
 			var denied error
 			if revoked {
 				denied = ErrRootRevoked
@@ -205,15 +265,19 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 			return t, errors.Join(errors.New("parent must be preparing or running for new delegation"), denied, readErr, revokeErr, failErr)
 		}
 	}
+	if revoked, err := s.store.RootRevoked(ctx, scope); err != nil || revoked {
+		return t, errors.Join(err, ErrRootRevoked)
+	}
 	createCtx, createCancel := context.WithCancel(ctx)
 	op = &creation{root: t.RootID, cancel: createCancel, done: make(chan struct{})}
 	taskID = t.ID
+	s.mu.Lock()
 	if s.creates == nil {
 		s.creates = make(map[string]*creation)
 	}
 	s.creates[t.ID] = op
 	s.mu.Unlock()
-	locked = false
+	unlock()
 	spec := s.spec
 	spec.TaskID = t.ID
 	spec.NetworkRules = append([]runtime.NetworkRule(nil), s.spec.NetworkRules...)
@@ -222,7 +286,7 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 	if s.handles == nil {
 		s.handles = make(map[string]*ownedEnvironment)
 	}
-	s.handles[t.ID] = &ownedEnvironment{env: env, removed: env.ID == ""}
+	s.handles[t.ID] = &ownedEnvironment{env: env}
 	s.mu.Unlock()
 	// Persistence and cleanup must not inherit a cancelled request context.
 	repair, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -240,12 +304,14 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 		return t, errors.Join(createErr, failErr, cleanupErr)
 	}
 	// Serialize adoption with durable stop admission, not with backend IO.
-	s.mu.Lock()
-	locked = true
-	revoked, revokeErr := s.store.RootRevoked(repair, scope)
-	if createCtx.Err() != nil || revoked || revokeErr != nil {
-		s.mu.Unlock()
-		locked = false
+	release, lockErr = s.gate(createCtx, t.RootID)
+	var revoked bool
+	var revokeErr error
+	if lockErr == nil {
+		revoked, revokeErr = s.store.RootRevoked(repair, scope)
+	}
+	if lockErr != nil || createCtx.Err() != nil || revoked || revokeErr != nil {
+		unlock()
 		cleanupErr := s.discardCandidate(repair, scope, t.ID, env)
 		persisted, readErr := s.store.Get(repair, scope, t.ID)
 		if readErr == nil {
@@ -255,8 +321,7 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 	}
 	bound, err := s.store.BindEnvironment(ctx, scope, t.ID, taskstore.Created, env.ID)
 	if err != nil {
-		s.mu.Unlock()
-		locked = false
+		unlock()
 		cleanupErr := s.discardCandidate(repair, scope, t.ID, env)
 		persisted, readErr := s.store.Get(repair, scope, t.ID)
 		if readErr == nil {
@@ -279,8 +344,10 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 }
 
 func (s *Service) discardCandidate(ctx context.Context, scope taskstore.Scope, id string, env runtime.Environment) error {
-	if env.ID == "" {
-		return nil
+	if strings.TrimSpace(env.ID) == "" {
+		// Create was invoked: missing identity is an unknown runtime outcome,
+		// not evidence that no environment exists.
+		return ErrRecoveryRequired
 	}
 	t, err := s.store.Get(ctx, scope, id)
 	if err != nil {
@@ -311,13 +378,18 @@ func (s *Service) discardCandidate(ctx context.Context, scope taskstore.Scope, i
 func (s *Service) StopTask(ctx context.Context, rootID string) error {
 	scope := taskstore.Scope{CallerID: s.caller, RootID: rootID}
 	for {
-		s.mu.Lock()
-		if err := s.store.RevokeRoot(ctx, scope); err != nil {
-			s.mu.Unlock()
+		release, err := s.gate(ctx, rootID)
+		if err != nil {
 			return err
 		}
+		if err := s.store.RevokeRoot(ctx, scope); err != nil {
+			release()
+			return err
+		}
+		s.mu.Lock()
 		if done := s.stops[rootID]; done != nil {
 			s.mu.Unlock()
+			release()
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -338,6 +410,7 @@ func (s *Service) StopTask(ctx context.Context, rootID string) error {
 			}
 		}
 		s.mu.Unlock()
+		release()
 		defer func() {
 			s.mu.Lock()
 			delete(s.stops, rootID)
@@ -380,10 +453,10 @@ func (s *Service) stopEnvironment(ctx context.Context, scope taskstore.Scope, t 
 	h := s.handles[t.ID]
 	s.mu.Unlock()
 	// Even an empty persisted binding may hide a create interrupted by restart.
-	if h == nil {
+	if h == nil || (!h.neverInvoked && !h.removed && strings.TrimSpace(h.env.ID) == "") {
 		return ErrRecoveryRequired
 	}
-	if !h.removed {
+	if !h.removed && !h.neverInvoked {
 		stopErr := s.backend.Stop(ctx, h.env)
 		removeErr := s.backend.Remove(ctx, h.env)
 		if removeErr == nil {
