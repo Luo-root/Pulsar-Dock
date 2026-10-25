@@ -33,9 +33,12 @@ type StatusOutput struct {
 }
 
 type PublishInput struct {
-	TaskID string `json:"task_id" jsonschema:"the task publishing the artifact"`
-	Kind   string `json:"kind" jsonschema:"artifact kind such as review or patch"`
-	Digest string `json:"digest" jsonschema:"digest of an immutable artifact snapshot"`
+	TaskID         string `json:"task_id" jsonschema:"the task publishing the artifact; persistent publication requires the authenticated root task"`
+	Kind           string `json:"kind" jsonschema:"artifact kind such as review or patch"`
+	Digest         string `json:"digest,omitempty" jsonschema:"optional lowercase SHA-256 of the UTF-8 payload; verified by the server"`
+	Payload        string `json:"payload,omitempty" jsonschema:"UTF-8 text, nonempty and at most 4194304 bytes for persistent publication; never a file path"`
+	BaselineDigest string `json:"baseline_digest,omitempty" jsonschema:"required source baseline reference for persistent publication"`
+	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"required retry key scoped to the authenticated task for persistent publication"`
 }
 
 type PublishOutput struct {
@@ -97,6 +100,9 @@ func (s *Service) CreateServer() *mcp.Server {
 	artifactDescription := "Record an artifact reference in memory for an existing task. This prototype does not persist artifact files or implement an ArtifactStore, and never applies changes to the host project."
 	if s.persistent != nil {
 		artifactDescription = "Unsupported: persistent ArtifactStore is unavailable. No artifact is published or applied to the host project."
+		if s.persistent.artifacts != nil {
+			artifactDescription = "Persist an immutable UTF-8 text snapshot (maximum 4 MiB) for the authenticated root task. Requires a source baseline and idempotency key. Content remains restricted-unscanned; publication does not execute, apply, read, or authorize forwarding it."
+		}
 	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "artifact.publish",
@@ -174,7 +180,7 @@ func (s *Service) publish(ctx context.Context, req *mcp.CallToolRequest, input P
 		return nil, PublishOutput{}, err
 	}
 	if s.persistent != nil {
-		return s.runPersistentPublish(ctx, identity)
+		return s.runPersistentPublish(ctx, identity, input)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
