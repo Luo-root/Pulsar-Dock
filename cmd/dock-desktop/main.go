@@ -21,6 +21,7 @@ import (
 
 	"github.com/Luo-root/pulsar-dock/internal/controller"
 	"github.com/Luo-root/pulsar-dock/internal/desktopapi"
+	"github.com/Luo-root/pulsar-dock/internal/liveagent"
 	"github.com/Luo-root/pulsar-dock/internal/runtime"
 	"github.com/Luo-root/pulsar-dock/internal/taskstore"
 )
@@ -48,6 +49,7 @@ type Server struct {
 	closeErr      error
 	done          chan struct{}
 	bootstrapInfo os.FileInfo
+	cleanups      []controller.GuestCleanup
 }
 
 func main() {
@@ -130,25 +132,42 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 		}
 	}()
 	backend := runtime.NewSbxBackend(nil, staging)
+	if err := liveagent.StartupCheck(ctx, backend); err != nil {
+		return nil, errors.New("live agent runtime unavailable")
+	}
 	facades := make(map[string]*desktopapi.Facade, 3)
-	for _, agent := range []string{"claude", "codex", "opencode"} {
-		service, e := controller.New(store, backend, "desktop-"+agent, controller.Policy{
-			Agent: agent, TemplateRef: runtime.SbxTemplate, Memory: "2g", CPUs: 2,
-		})
+	var cleanups []controller.GuestCleanup
+	for _, def := range liveagent.Definitions() {
+		planner, verifier, e := liveagent.Components(def.ID, backend, staging)
+		if e != nil {
+			return nil, errors.New("agent components unavailable")
+		}
+		service, e := controller.NewWithExecution(store, backend, "desktop-"+def.ID, controller.Policy{
+			Agent: def.ID, TemplateRef: runtime.SbxTemplate, Memory: "2g", CPUs: 2,
+		}, controller.ExecutionConfig{Planner: planner, Verifier: verifier, MaxBudgetUSD: 1})
 		if e != nil {
 			return nil, errors.New("controller unavailable")
 		}
-		f, e := desktopapi.New(service, store, "desktop-"+agent, agent, []desktopapi.AgentConfig{{ID: agent, DisplayName: agent, Installed: false, CLIVerified: false, ModelVerified: false, Operations: nil}})
+		ops := []desktopapi.Operation{desktopapi.OperationCreate}
+		if def.CLIVerified && def.ModelVerified {
+			ops = append(ops, desktopapi.OperationExecute)
+		}
+		f, e := desktopapi.New(service, store, "desktop-"+def.ID, def.ID, []desktopapi.AgentConfig{{
+			ID: def.ID, DisplayName: def.DisplayName, Installed: def.Installed, CLIVerified: def.CLIVerified, ModelVerified: def.ModelVerified, Operations: ops,
+		}})
 		if e != nil {
 			return nil, errors.New("desktop facade unavailable")
 		}
-		facades[agent] = f
+		facades[def.ID] = f
+		if cleanup, ok := verifier.(controller.GuestCleanup); ok {
+			cleanups = append(cleanups, cleanup)
+		}
 	}
 	h, err := factory(facades, desktopapi.HTTPConfig{Token: bootstrap.Token, AllowedHosts: []string{ln.Addr().String()}, AllowedOrigins: []string{origin}, MaxBodyBytes: 1 << 20})
 	if err != nil || h == nil {
 		return nil, errors.New("desktop HTTP transport unavailable")
 	}
-	s := &Server{HTTP: &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}, Listener: ln, BootstrapPath: bootstrapPath, Store: store, Backend: backend}
+	s := &Server{HTTP: &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}, Listener: ln, BootstrapPath: bootstrapPath, Store: store, Backend: backend, cleanups: cleanups}
 	s.bootstrapInfo, err = os.Lstat(bootstrapPath)
 	if err != nil {
 		return nil, errors.New("bootstrap identity unavailable")
@@ -174,6 +193,9 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 func (s *Server) Serve() error { return s.HTTP.Serve(s.Listener) }
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		for _, cleanup := range s.cleanups {
+			_ = cleanup.Close()
+		}
 		if s.done != nil {
 			close(s.done)
 		}
