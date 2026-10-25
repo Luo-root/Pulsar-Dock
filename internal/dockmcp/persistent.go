@@ -91,13 +91,35 @@ func (s *Service) persistentRoot(ctx context.Context, grant CapabilityGrant) (ta
 		return taskstore.Task{}, ErrUnauthorized
 	}
 	root, err := s.persistent.store.Get(ctx, scope, grant.RootTaskID)
-	if err != nil || root.ID != grant.RootTaskID || root.RootID != grant.RootTaskID || root.CallerID != grant.CallerID || root.ParentID != "" || root.EnvironmentID == "" || root.EnvironmentID != grant.EnvironmentID {
+	if err != nil || root.ID != grant.RootTaskID || root.RootID != grant.RootTaskID || root.CallerID != grant.CallerID || root.ParentID != "" || root.EnvironmentID == "" || (grant.SubjectTaskID == grant.RootTaskID && root.EnvironmentID != grant.EnvironmentID) {
 		return taskstore.Task{}, ErrUnauthorized
 	}
 	// Stopped, expired, failed and stopping tasks may not keep using a capability.
 	switch root.State {
 	case taskstore.Preparing, taskstore.Running, taskstore.WaitingApproval, taskstore.Succeeded:
 		return root, nil
+	default:
+		return taskstore.Task{}, ErrUnauthorized
+	}
+}
+
+// persistentSubject rechecks root denial/state and the subject's persisted
+// caller/tree/parent/environment on issuance and before/after every operation.
+func (s *Service) persistentSubject(ctx context.Context, grant CapabilityGrant) (taskstore.Task, error) {
+	root, err := s.persistentRoot(ctx, grant)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	if grant.SubjectTaskID == grant.RootTaskID {
+		return root, nil
+	}
+	subject, err := s.persistent.store.Get(ctx, taskstore.Scope{CallerID: grant.CallerID, RootID: grant.RootTaskID}, grant.SubjectTaskID)
+	if err != nil || subject.ID != grant.SubjectTaskID || subject.CallerID != grant.CallerID || subject.RootID != root.ID || subject.ParentID != root.ID || subject.EnvironmentID == "" || subject.EnvironmentID == root.EnvironmentID || subject.EnvironmentID != grant.EnvironmentID {
+		return taskstore.Task{}, ErrUnauthorized
+	}
+	switch subject.State {
+	case taskstore.Preparing, taskstore.Running, taskstore.WaitingApproval, taskstore.Succeeded:
+		return subject, nil
 	default:
 		return taskstore.Task{}, ErrUnauthorized
 	}
@@ -127,7 +149,10 @@ func (s *Service) createPersistentChild(ctx context.Context, grant CapabilityGra
 }
 
 func (s *Service) persistentStatus(ctx context.Context, grant CapabilityGrant, id string) (*mcp.CallToolResult, StatusOutput, error) {
-	if _, err := s.persistentRoot(ctx, grant); err != nil {
+	if grant.SubjectTaskID != grant.RootTaskID && id != grant.SubjectTaskID {
+		return nil, StatusOutput{}, ErrUnauthorized
+	}
+	if _, err := s.persistentSubject(ctx, grant); err != nil {
 		return nil, StatusOutput{}, err
 	}
 	task, err := s.persistent.store.Get(ctx, taskstore.Scope{CallerID: grant.CallerID, RootID: grant.RootTaskID}, id)

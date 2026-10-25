@@ -33,7 +33,7 @@ type StatusOutput struct {
 }
 
 type PublishInput struct {
-	TaskID         string `json:"task_id" jsonschema:"the task publishing the artifact; persistent publication requires the authenticated root task"`
+	TaskID         string `json:"task_id" jsonschema:"the task publishing the artifact; persistent publication requires the authenticated subject task"`
 	Kind           string `json:"kind" jsonschema:"artifact kind such as review or patch"`
 	Digest         string `json:"digest,omitempty" jsonschema:"optional lowercase SHA-256 of the UTF-8 payload; verified by the server"`
 	Payload        string `json:"payload,omitempty" jsonschema:"UTF-8 text, nonempty and at most 4194304 bytes for persistent publication; never a file path"`
@@ -101,7 +101,7 @@ func (s *Service) CreateServer() *mcp.Server {
 	if s.persistent != nil {
 		artifactDescription = "Unsupported: persistent ArtifactStore is unavailable. No artifact is published or applied to the host project."
 		if s.persistent.artifacts != nil {
-			artifactDescription = "Persist an immutable UTF-8 text snapshot (maximum 4 MiB) for the authenticated root task. Requires a source baseline and idempotency key. Content remains restricted-unscanned; publication does not execute, apply, read, or authorize forwarding it."
+			artifactDescription = "Persist an immutable UTF-8 text snapshot (maximum 4 MiB) for the authenticated subject task. Requires a source baseline and idempotency key. Content remains restricted-unscanned; publication does not execute, apply, read, or authorize forwarding it."
 		}
 	}
 	mcp.AddTool(server, &mcp.Tool{

@@ -36,8 +36,11 @@ type RequestIdentity struct {
 type RequestAuthenticator func(context.Context, *mcp.CallToolRequest) (RequestIdentity, error)
 
 type CapabilityGrant struct {
-	CallerID      string
-	RootTaskID    string
+	CallerID   string
+	RootTaskID string
+	// SubjectTaskID is host-issued, never Agent input. Empty means RootTaskID.
+	// Persistent child grants retain the real tree root in RootTaskID.
+	SubjectTaskID string
 	EnvironmentID string
 	ExpiresAt     time.Time
 	Actions       []string
@@ -51,14 +54,25 @@ type capability struct {
 }
 
 // IssueCapability is a trusted-host API, never an MCP tool. Persistent mode
-// requires an existing root with the matching environment; only the independent
+// requires an existing root and a persisted environment-bound subject; only the independent
 // prototype registers absent roots as records (not Agent environments).
 // Tokens are returned once and only their hashes are retained.
 func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	if grant.CallerID == "" || grant.RootTaskID == "" || grant.EnvironmentID == "" || !grant.ExpiresAt.After(time.Now()) || len(grant.Actions) == 0 {
 		return "", errors.New("invalid capability grant")
 	}
+	if grant.SubjectTaskID == "" {
+		grant.SubjectTaskID = grant.RootTaskID
+	}
+	// The prototype has no environment facts for children; do not pretend that
+	// explicit child subjects can be securely bound there. Legacy roots remain unchanged.
+	if s.persistent == nil && grant.SubjectTaskID != grant.RootTaskID {
+		return "", ErrUnauthorized
+	}
 	for _, action := range grant.Actions {
+		if grant.SubjectTaskID != grant.RootTaskID && action == ActionCreateChild {
+			return "", ErrUnauthorized
+		}
 		if action != ActionCreateChild && action != ActionStatus && action != ActionPublish {
 			return "", errors.New("invalid capability action")
 		}
@@ -70,7 +84,7 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	grant.Actions = append([]string(nil), grant.Actions...)
 	if s.persistent != nil {
-		if _, err := s.persistentRoot(context.Background(), grant); err != nil {
+		if _, err := s.persistentSubject(context.Background(), grant); err != nil {
 			return "", ErrUnauthorized
 		}
 	}
@@ -93,7 +107,10 @@ func (s *Service) IssueCapability(grant CapabilityGrant) (string, error) {
 }
 
 // RevokeCapability revokes the matching token and its root task's entire subtree,
-// including independently issued descendant capabilities. It is idempotent and
+// including independently issued descendant capabilities. In persistent mode,
+// revoking a child-subject token ALSO denies its real root and all siblings;
+// this is a trusted-host tree kill switch, not a child-facing token logout API.
+// It is idempotent and
 // does not reveal whether a token existed. Other task trees remain unaffected.
 // In persistent mode a nil result acknowledges durable revocation. On storage
 // failure local denial remains active, but the host must retry before restart.
@@ -175,6 +192,9 @@ func (s *Service) authorizeLocked(identity RequestIdentity, action, taskID strin
 		return CapabilityGrant{}, ErrUnauthorized
 	}
 	if s.persistent != nil {
+		if found.grant.SubjectTaskID != found.grant.RootTaskID && (action != ActionStatus && action != ActionPublish || taskID != "" && taskID != found.grant.SubjectTaskID) {
+			return CapabilityGrant{}, ErrUnauthorized
+		}
 		allowed := false
 		for _, candidate := range found.grant.Actions {
 			allowed = allowed || candidate == action
