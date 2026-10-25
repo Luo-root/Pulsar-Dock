@@ -17,6 +17,31 @@ import (
 
 const fixtureID = "12345678-1234-4234-8234-123456789abc"
 
+func TestScopedPolicyUsesExactSbx0492Identity(t *testing.T) {
+	for _, tc := range []struct {
+		name, scope, applies, resource string
+		accept                         bool
+	}{
+		{"exact", "sandbox:owned", "sandbox:owned", "localhost:49123", true},
+		{"legacy-shape", "sandbox", "owned", "localhost:49123", false},
+		{"other-sandbox", "sandbox:other", "sandbox:other", "localhost:49123", false},
+		{"mismatched-target", "sandbox:owned", "sandbox:other", "localhost:49123", false},
+		{"unexpected-port", "sandbox:owned", "sandbox:owned", "localhost:49124", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := readyFake(t)
+			rules := []policyRule{{Scope: "global", Applies: "all", Type: "network", Decision: "deny", Resources: []string{"**"}, Status: "active", Actions: []string{"net:connect:tcp", "net:connect:udp"}}, {Scope: tc.scope, Applies: tc.applies, Type: "network", Decision: "allow", Resources: []string{tc.resource}, Status: "active"}}
+			data, _ := json.Marshal(map[string]any{"rules": rules})
+			f.overrides["policy ls owned --json"] = string(data)
+			b := NewSbxBackend(f, t.TempDir())
+			err := b.policies(context.Background(), "owned", map[string]bool{"localhost:49123": true})
+			if (err == nil) != tc.accept {
+				t.Fatalf("accept=%v err=%v", tc.accept, err)
+			}
+		})
+	}
+}
+
 func spec() EnvironmentSpec {
 	return EnvironmentSpec{TaskID: "task1", Agent: "shell", TemplateRef: SbxTemplate, Workspace: WorkspaceNone, Skills: SkillsOff, CPUs: 2, Memory: "2g"}
 }
@@ -64,7 +89,7 @@ func (f *fakeRun) Run(ctx context.Context, args ...string) ([]byte, error) {
 		rules := []policyRule{{ID: "deny", Scope: "global", Applies: "all", Type: "network", Decision: "deny", Resources: []string{"**"}, Status: "active", Actions: []string{"net:connect:tcp", "net:connect:udp"}}}
 		if key != "policy ls --json" && !f.hideRules {
 			for v := range f.grants {
-				rules = append(rules, policyRule{ID: v, Scope: "sandbox", Applies: f.name, Type: "network", Decision: "allow", Resources: []string{v}, Status: "active"})
+				rules = append(rules, policyRule{ID: v, Scope: "sandbox:" + f.name, Applies: "sandbox:" + f.name, Type: "network", Decision: "allow", Resources: []string{v}, Status: "active"})
 			}
 		}
 		v, _ := json.Marshal(map[string]any{"rules": rules})

@@ -223,7 +223,7 @@ func (b *SbxBackend) policies(ctx context.Context, name string, allowed map[stri
 			return berr(ErrDenied, "policy", "unknown decision")
 		}
 		for _, v := range r.Resources {
-			if name == "" || r.Scope != "sandbox" || r.Applies != name || !allowed[v] || r.Type != "network" {
+			if name == "" || r.Scope != "sandbox:"+name || r.Applies != "sandbox:"+name || !allowed[v] || r.Type != "network" {
 				return berr(ErrDenied, "policy", "unexpected allow rule")
 			}
 			seen[v] = true
