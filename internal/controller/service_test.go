@@ -26,6 +26,7 @@ func (b *fakeBackend) Create(_ context.Context, spec runtime.EnvironmentSpec) (r
 	}
 	return runtime.Environment{ID: "real-" + spec.TaskID}, nil
 }
+func (b *fakeBackend) Stop(context.Context, runtime.Environment) error { return nil }
 func (b *fakeBackend) Remove(_ context.Context, env runtime.Environment) error {
 	b.removed = append(b.removed, env.ID)
 	return b.removeErr
@@ -90,9 +91,6 @@ func TestCreatePolicyIdempotencyAndRecovery(t *testing.T) {
 		if spec.Workspace != runtime.WorkspaceNone || spec.Skills != runtime.SkillsOff || spec.TemplateRef != runtime.SbxTemplate || spec.CPUs != 2 || spec.Memory != "1g" || spec.ExpiresAfter != 0 || spec.GatewayURL != "" || len(spec.NetworkRules) != 0 {
 			t.Fatalf("policy changed: %+v", spec)
 		}
-	}
-	if err = s.StopTask(ctx, root.ID); !errors.Is(err, ErrStopUnsupported) {
-		t.Fatal(err)
 	}
 	if err = store.Close(); err != nil {
 		t.Fatal(err)

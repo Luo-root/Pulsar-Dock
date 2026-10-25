@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,7 +17,7 @@ import (
 )
 
 var ErrRecoveryRequired = errors.New("controller recovery required")
-var ErrStopUnsupported = errors.New("controller stop is not implemented: no revocation or tree cleanup")
+var ErrRootRevoked = errors.New("root delegation revoked")
 
 // Policy is supplied only by trusted configuration, never by task input.
 // Gateway and TTL are currently unsupported and must be empty/zero. Creation
@@ -38,6 +39,8 @@ type taskStore interface {
 	Transition(context.Context, taskstore.Scope, string, taskstore.State, taskstore.State) (taskstore.Task, error)
 	ListRootsForRecovery(context.Context, string, string, int) (taskstore.RootPage, error)
 	ListTasksForRecovery(context.Context, taskstore.Scope, string, int) (taskstore.TaskPage, error)
+	RevokeRoot(context.Context, taskstore.Scope) error
+	RootRevoked(context.Context, taskstore.Scope) (bool, error)
 }
 
 type Service struct {
@@ -46,6 +49,21 @@ type Service struct {
 	backend runtime.RuntimeBackend
 	caller  string
 	spec    runtime.EnvironmentSpec
+	// Handles are runtime cleanup capabilities, never persisted task facts.
+	handles map[string]*ownedEnvironment
+	creates map[string]*creation
+	stops   map[string]chan struct{}
+}
+
+type ownedEnvironment struct {
+	env     runtime.Environment
+	removed bool
+}
+
+type creation struct {
+	root   string
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func New(store *taskstore.Store, backend runtime.RuntimeBackend, caller string, policy Policy) (*Service, error) {
@@ -80,7 +98,20 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 		return taskstore.Task{}, errors.New("goal and idempotency key required")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	locked := true
+	var op *creation
+	var taskID string
+	defer func() {
+		if !locked {
+			s.mu.Lock()
+		}
+		if op != nil {
+			op.cancel()
+			delete(s.creates, taskID)
+			close(op.done)
+		}
+		s.mu.Unlock()
+	}()
 	scope := taskstore.Scope{CallerID: s.caller, RootID: parent}
 	// Capture existing IDs before insertion: Store intentionally returns no
 	// inserted flag. Never retry Create for a persisted, unbound task after restart.
@@ -130,6 +161,22 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 	}
 	scope.RootID = t.RootID
 	if existing[t.ID] {
+		if pending := s.creates[t.ID]; pending != nil {
+			s.mu.Unlock()
+			locked = false
+			select {
+			case <-ctx.Done():
+				return t, ctx.Err()
+			case <-pending.done:
+			}
+			s.mu.Lock()
+			locked = true
+			persisted, readErr := s.store.Get(ctx, scope, t.ID)
+			if readErr == nil && persisted.State == taskstore.Created {
+				readErr = ErrRecoveryRequired
+			}
+			return persisted, readErr
+		}
 		if t.State == taskstore.Created {
 			return t, ErrRecoveryRequired
 		}
@@ -139,20 +186,44 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 		// Store resolves idempotency before checking parent state. Only a newly
 		// inserted child needs the stricter Controller admission check.
 		p, readErr := s.store.Get(ctx, scope, parent)
-		if readErr != nil || (p.State != taskstore.Preparing && p.State != taskstore.Running) {
+		revoked, revokeErr := s.store.RootRevoked(ctx, scope)
+		if readErr != nil || revokeErr != nil || revoked || (p.State != taskstore.Preparing && p.State != taskstore.Running) {
 			repair, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
 			failed, failErr := s.store.Transition(repair, scope, t.ID, taskstore.Created, taskstore.Failed)
 			if failErr == nil {
 				t = failed
 			}
-			return t, errors.Join(errors.New("parent must be preparing or running for new delegation"), readErr, failErr)
+			if s.handles == nil {
+				s.handles = make(map[string]*ownedEnvironment)
+			}
+			s.handles[t.ID] = &ownedEnvironment{removed: true}
+			var denied error
+			if revoked {
+				denied = ErrRootRevoked
+			}
+			return t, errors.Join(errors.New("parent must be preparing or running for new delegation"), denied, readErr, revokeErr, failErr)
 		}
 	}
+	createCtx, createCancel := context.WithCancel(ctx)
+	op = &creation{root: t.RootID, cancel: createCancel, done: make(chan struct{})}
+	taskID = t.ID
+	if s.creates == nil {
+		s.creates = make(map[string]*creation)
+	}
+	s.creates[t.ID] = op
+	s.mu.Unlock()
+	locked = false
 	spec := s.spec
 	spec.TaskID = t.ID
 	spec.NetworkRules = append([]runtime.NetworkRule(nil), s.spec.NetworkRules...)
-	env, createErr := s.backend.Create(ctx, spec)
+	env, createErr := s.backend.Create(createCtx, spec)
+	s.mu.Lock()
+	if s.handles == nil {
+		s.handles = make(map[string]*ownedEnvironment)
+	}
+	s.handles[t.ID] = &ownedEnvironment{env: env, removed: env.ID == ""}
+	s.mu.Unlock()
 	// Persistence and cleanup must not inherit a cancelled request context.
 	repair, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -168,8 +239,24 @@ func (s *Service) create(ctx context.Context, parent string, r Request) (tasksto
 		cleanupErr := s.discardCandidate(repair, scope, t.ID, env)
 		return t, errors.Join(createErr, failErr, cleanupErr)
 	}
+	// Serialize adoption with durable stop admission, not with backend IO.
+	s.mu.Lock()
+	locked = true
+	revoked, revokeErr := s.store.RootRevoked(repair, scope)
+	if createCtx.Err() != nil || revoked || revokeErr != nil {
+		s.mu.Unlock()
+		locked = false
+		cleanupErr := s.discardCandidate(repair, scope, t.ID, env)
+		persisted, readErr := s.store.Get(repair, scope, t.ID)
+		if readErr == nil {
+			t = persisted
+		}
+		return t, errors.Join(createCtx.Err(), revokeErr, ErrRootRevoked, cleanupErr, readErr)
+	}
 	bound, err := s.store.BindEnvironment(ctx, scope, t.ID, taskstore.Created, env.ID)
 	if err != nil {
+		s.mu.Unlock()
+		locked = false
 		cleanupErr := s.discardCandidate(repair, scope, t.ID, env)
 		persisted, readErr := s.store.Get(repair, scope, t.ID)
 		if readErr == nil {
@@ -211,9 +298,117 @@ func (s *Service) discardCandidate(ctx context.Context, scope taskstore.Scope, i
 	if err = s.backend.Remove(ctx, env); err != nil {
 		return errors.Join(ErrRecoveryRequired, err)
 	}
+	s.mu.Lock()
+	if h := s.handles[id]; h != nil && h.env == env {
+		h.removed = true
+	}
+	s.mu.Unlock()
 	return nil
 }
 
-// StopTask deliberately performs no state transition: marking Stopped without
-// gateway revocation and descendant/process-tree cleanup would be misleading.
-func (s *Service) StopTask(context.Context, string) error { return ErrStopUnsupported }
+// StopTask is a trusted root-only operation. Revocation survives cancellation,
+// partial cleanup and restart. Only backend-returned handles authorize cleanup.
+func (s *Service) StopTask(ctx context.Context, rootID string) error {
+	scope := taskstore.Scope{CallerID: s.caller, RootID: rootID}
+	for {
+		s.mu.Lock()
+		if err := s.store.RevokeRoot(ctx, scope); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if done := s.stops[rootID]; done != nil {
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-done:
+			}
+			continue
+		}
+		if s.stops == nil {
+			s.stops = make(map[string]chan struct{})
+		}
+		done := make(chan struct{})
+		s.stops[rootID] = done
+		var pending []chan struct{}
+		for _, op := range s.creates {
+			if op.root == rootID {
+				op.cancel()
+				pending = append(pending, op.done)
+			}
+		}
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.stops, rootID)
+			close(done)
+			s.mu.Unlock()
+		}()
+		for _, wait := range pending {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-wait:
+			}
+		}
+		return s.stopTree(ctx, scope)
+	}
+}
+
+func (s *Service) stopTree(ctx context.Context, scope taskstore.Scope) error {
+	var result error
+	cursor := ""
+	for {
+		page, err := s.store.ListTasksForRecovery(ctx, scope, cursor, 500)
+		if err != nil {
+			return errors.Join(result, err)
+		}
+		for _, t := range page.Tasks {
+			if err := s.stopEnvironment(ctx, scope, t); err != nil {
+				result = errors.Join(result, fmt.Errorf("task %s: %w", t.ID, err))
+			}
+		}
+		cursor = page.NextCursor
+		if cursor == "" {
+			return result
+		}
+	}
+}
+
+func (s *Service) stopEnvironment(ctx context.Context, scope taskstore.Scope, t taskstore.Task) error {
+	s.mu.Lock()
+	h := s.handles[t.ID]
+	s.mu.Unlock()
+	// Even an empty persisted binding may hide a create interrupted by restart.
+	if h == nil {
+		return ErrRecoveryRequired
+	}
+	if !h.removed {
+		stopErr := s.backend.Stop(ctx, h.env)
+		removeErr := s.backend.Remove(ctx, h.env)
+		if removeErr == nil {
+			s.mu.Lock()
+			h.removed = true
+			s.mu.Unlock()
+		}
+		if stopErr != nil || removeErr != nil {
+			return errors.Join(stopErr, removeErr)
+		}
+	}
+	if t.EnvironmentID != "" && t.EnvironmentID != h.env.ID {
+		// Reclaim our candidate, but never claim the unknown persisted environment.
+		return ErrRecoveryRequired
+	}
+	if !taskstore.AllowedTransition(t.State, taskstore.Stopping) && t.State != taskstore.Stopping {
+		return nil // terminal history is immutable
+	}
+	if t.State != taskstore.Stopping {
+		var err error
+		t, err = s.store.Transition(ctx, scope, t.ID, t.State, taskstore.Stopping)
+		if err != nil {
+			return err
+		}
+	}
+	_, err := s.store.Transition(ctx, scope, t.ID, taskstore.Stopping, taskstore.Stopped)
+	return err
+}
