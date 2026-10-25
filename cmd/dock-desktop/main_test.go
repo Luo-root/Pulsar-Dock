@@ -29,6 +29,25 @@ func testHandlerFactory(facades map[string]*desktopapi.Facade, cfg desktopapi.HT
 	}), nil
 }
 
+func TestCloseAllowsSameDirectoryRestart(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 2; i++ {
+		s, err := Start(context.Background(), dir, "http://127.0.0.1:15353", "127.0.0.1:0", testHandlerFactory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, bootstrapName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("bootstrap remained after close")
+		}
+	}
+}
+
 func TestWriteBootstrapIsRandomAndPrivate(t *testing.T) {
 	dir := t.TempDir()
 	path, b, err := writeBootstrap(dir)

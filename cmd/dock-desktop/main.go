@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,6 +44,10 @@ type Server struct {
 	BootstrapPath string
 	Store         *taskstore.Store
 	Backend       *runtime.SbxBackend
+	closeOnce     sync.Once
+	closeErr      error
+	done          chan struct{}
+	bootstrapInfo os.FileInfo
 }
 
 func main() {
@@ -144,27 +149,58 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 		return nil, errors.New("desktop HTTP transport unavailable")
 	}
 	s := &Server{HTTP: &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}, Listener: ln, BootstrapPath: bootstrapPath, Store: store, Backend: backend}
+	s.bootstrapInfo, err = os.Lstat(bootstrapPath)
+	if err != nil {
+		return nil, errors.New("bootstrap identity unavailable")
+	}
+	s.done = make(chan struct{})
 	keepListener = true
 	keepStore = true
 	bootstrapCreated = false
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-s.done:
+			return
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.HTTP.Shutdown(shutdownCtx)
+		_ = s.Close()
 	}()
 	return s, nil
 }
 
 func (s *Server) Serve() error { return s.HTTP.Serve(s.Listener) }
 func (s *Server) Close() error {
-	if s.HTTP != nil {
-		_ = s.HTTP.Close()
-	}
-	if s.Store != nil {
-		return s.Store.Close()
-	}
-	return nil
+	s.closeOnce.Do(func() {
+		if s.done != nil {
+			close(s.done)
+		}
+		if s.HTTP != nil {
+			s.closeErr = errors.Join(s.closeErr, s.HTTP.Close())
+		}
+		if s.Listener != nil {
+			if err := s.Listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				s.closeErr = errors.Join(s.closeErr, err)
+			}
+		}
+		if s.Store != nil {
+			s.closeErr = errors.Join(s.closeErr, s.Store.Close())
+		}
+		if s.bootstrapInfo != nil {
+			current, err := os.Lstat(s.BootstrapPath)
+			if errors.Is(err, os.ErrNotExist) {
+				return
+			}
+			if err != nil || !os.SameFile(s.bootstrapInfo, current) {
+				s.closeErr = errors.Join(s.closeErr, errors.New("bootstrap identity changed; cleanup refused"))
+				return
+			}
+			s.closeErr = errors.Join(s.closeErr, os.Remove(s.BootstrapPath))
+		}
+	})
+	return s.closeErr
 }
 
 func writeBootstrap(dir string) (string, Bootstrap, error) {
