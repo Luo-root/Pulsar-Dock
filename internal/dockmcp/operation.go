@@ -61,7 +61,7 @@ func (s *Service) runPersistentCreate(ctx context.Context, id RequestIdentity, i
 	}
 	// Revalidate durable environment before admission, then capability immediately
 	// before Controller side effects. Revocation racing admission cancels opctx.
-	_, err = s.persistentRoot(opctx, grant)
+	_, err = s.persistentSubject(opctx, grant)
 	var out ChildTaskOutput
 	if err == nil {
 		err = s.checkOperation(opctx, id, ActionCreateChild)
@@ -70,7 +70,7 @@ func (s *Service) runPersistentCreate(ctx context.Context, id RequestIdentity, i
 		_, out, err = s.createPersistentChild(opctx, grant, input)
 	}
 	if err == nil {
-		_, err = s.persistentRoot(opctx, grant)
+		_, err = s.persistentSubject(opctx, grant)
 	}
 	if err == nil {
 		err = opctx.Err()
@@ -89,7 +89,7 @@ func (s *Service) runPersistentStatus(ctx context.Context, id RequestIdentity, i
 	}
 	_, out, err := s.persistentStatus(opctx, grant, input.TaskID)
 	if err == nil {
-		_, err = s.persistentRoot(opctx, grant)
+		_, err = s.persistentSubject(opctx, grant)
 	}
 	if err == nil {
 		err = opctx.Err()
@@ -106,12 +106,12 @@ func (s *Service) runPersistentPublish(ctx context.Context, id RequestIdentity, 
 	if err != nil {
 		return nil, PublishOutput{}, err
 	}
-	root, err := s.persistentRoot(opctx, grant)
+	subject, err := s.persistentSubject(opctx, grant)
 	var out PublishOutput
 	if err == nil && s.persistent.artifacts == nil {
 		err = ErrArtifactUnsupported
 	}
-	if err == nil && input.TaskID != grant.RootTaskID {
+	if err == nil && input.TaskID != grant.SubjectTaskID {
 		// A root capability cannot publish on behalf of a child environment.
 		err = ErrUnauthorized
 	}
@@ -124,8 +124,8 @@ func (s *Service) runPersistentPublish(ctx context.Context, id RequestIdentity, 
 	if err == nil {
 		var meta artifactstore.Metadata
 		meta, err = s.persistent.artifacts.Put(opctx, artifactstore.PutRequest{
-			Scope:         artifactstore.Scope{CallerID: grant.CallerID, RootID: root.RootID, TaskID: root.ID},
-			EnvironmentID: root.EnvironmentID, Kind: input.Kind, BaselineDigest: input.BaselineDigest,
+			Scope:         artifactstore.Scope{CallerID: grant.CallerID, RootID: subject.RootID, TaskID: subject.ID},
+			EnvironmentID: subject.EnvironmentID, Kind: input.Kind, BaselineDigest: input.BaselineDigest,
 			IdempotencyKey: input.IdempotencyKey, Bytes: []byte(input.Payload),
 		})
 		if err == nil {
@@ -133,7 +133,7 @@ func (s *Service) runPersistentPublish(ctx context.Context, id RequestIdentity, 
 		}
 	}
 	if err == nil {
-		_, err = s.persistentRoot(opctx, grant)
+		_, err = s.persistentSubject(opctx, grant)
 	}
 	// A commit may survive cancellation. Never delete an immutable snapshot or
 	// report success after invalidation; trusted recovery owns retained snapshots.
