@@ -50,10 +50,12 @@ type Service struct {
 	caller  string
 	spec    runtime.EnvironmentSpec
 	// Handles are runtime cleanup capabilities, never persisted task facts.
-	handles map[string]*ownedEnvironment
-	creates map[string]*creation
-	stops   map[string]chan struct{}
-	gates   map[string]chan struct{}
+	handles    map[string]*ownedEnvironment
+	creates    map[string]*creation
+	stops      map[string]chan struct{}
+	gates      map[string]chan struct{}
+	execution  *ExecutionConfig
+	executions map[string]*creation
 }
 
 // gate serializes only one root's database admission/adoption. Waiting is
@@ -404,6 +406,12 @@ func (s *Service) StopTask(ctx context.Context, rootID string) error {
 		s.stops[rootID] = done
 		var pending []chan struct{}
 		for _, op := range s.creates {
+			if op.root == rootID {
+				op.cancel()
+				pending = append(pending, op.done)
+			}
+		}
+		for _, op := range s.executions {
 			if op.root == rootID {
 				op.cancel()
 				pending = append(pending, op.done)
