@@ -39,7 +39,7 @@ func (fakeBackend) Inspect(context.Context, runtime.Environment) (runtime.Enviro
 }
 
 func TestClaudePlannerFixedCommandAndGoal(t *testing.T) {
-	p, _, err := Components(ClaudeID, fakeBackend{})
+	p, _, err := Components(ClaudeID, fakeBackend{}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestClaudePlannerFixedCommandAndGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.User != "agent" || r.Command[0] != ClaudeCLIPath {
+	if r.User != "agent" || r.Command[0] != claudeLauncher {
 		t.Fatalf("unexpected request: %#v", r)
 	}
 	for _, arg := range r.Command {
@@ -61,7 +61,7 @@ func TestClaudePlannerFixedCommandAndGoal(t *testing.T) {
 }
 
 func TestClaudePlannerRejectsInjectedGoalAndPath(t *testing.T) {
-	p, _, _ := Components(ClaudeID, fakeBackend{})
+	p, _, _ := Components(ClaudeID, fakeBackend{}, t.TempDir())
 	if _, err := p.Plan(agentadapter.Request{Goal: "x\n--unsafe", MCPConfigPath: ClaudeConfig, MaxBudgetUSD: 1}); err == nil {
 		t.Fatal("newline goal accepted")
 	}
@@ -72,7 +72,7 @@ func TestClaudePlannerRejectsInjectedGoalAndPath(t *testing.T) {
 
 func TestUnsupportedAgentsFailClosed(t *testing.T) {
 	for _, id := range []string{"codex", "opencode"} {
-		p, v, err := Components(id, fakeBackend{})
+		p, v, err := Components(id, fakeBackend{}, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}

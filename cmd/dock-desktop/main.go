@@ -136,7 +136,7 @@ func Start(ctx context.Context, stateDir, origin, listenAddr string, factory Han
 	}
 	facades := make(map[string]*desktopapi.Facade, 3)
 	for _, def := range liveagent.Definitions() {
-		planner, verifier, e := liveagent.Components(def.ID, backend)
+		planner, verifier, e := liveagent.Components(def.ID, backend, staging)
 		if e != nil {
 			return nil, errors.New("agent components unavailable")
 		}
