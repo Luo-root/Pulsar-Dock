@@ -23,7 +23,14 @@ Pulsar-Dock 是面向人和 Agent 的桌面安全协作工作台。Agent 在受�
 go test ./...
 go vet ./...
 go build ./cmd/dock-gateway
+
+npm ci --prefix frontend
+npm test --prefix frontend
+npm run typecheck --prefix frontend
+npm run build --prefix frontend
 ```
+
+前端开发预览使用 `npm run dev --prefix frontend`。当前 UI 是项目会话式本地原型：示例和本地预览消息不会调用模型或创建主机任务；真实任务、事件、权限和成果仍只来自只读 Host Bridge。Direct / 工作流 / AUTO 入口已保留，工作流执行与恢复尚未接入 Pulse / Pulse Durable。
 
 Go 版本要求：1.26.10。CI 分别在 Linux、Windows、macOS 执行 Go 核心测试、vet 和网关构建；Linux 另执行竞态测试。这不代表各平台已完成 sbx、桌面 UI、安装包或签名验证。桌面打包最低目标为 Windows 与 macOS，当前尚未产出正式桌面包。
 
