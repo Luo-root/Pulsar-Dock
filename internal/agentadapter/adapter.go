@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ClaudeVersion = "2.1.300"
+	ClaudeVersion = "2.1.306"
 	// GuestMCPConfigPath is a fixed, canonical Linux guest path, not a host path.
 	GuestMCPConfigPath = "/tmp/pulsar-dock/mcp.json"
 	MaxGoalBytes       = 16 * 1024
