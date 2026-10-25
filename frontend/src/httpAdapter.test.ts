@@ -1,24 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canOperate, DesktopHttpAdapter } from './httpAdapter';
 
+const task = { id: 'task-1', rootId: 'root-1', goal: 'goal', state: 'created', createdAt: '2026-10-25T00:00:00Z', updatedAt: '2026-10-25T00:00:00Z' };
+const agent = { id: 'opencode', installed: true, cliVerified: true, modelVerified: true, operations: ['create', 'execute'] };
+
 describe('DesktopHttpAdapter', () => {
-  it('uses bearer auth and exact task routes, including server stop', async () => {
+  it('uses real DTO fields, bearer auth, exact routes, and independent server stop', async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
-    const fetcher = vi.fn(async (url: string, init?: RequestInit) => { calls.push({ url, init }); return new Response(JSON.stringify(url.endsWith('/agents') ? [] : url.endsWith('/execute') ? { task: { id: 't' }, commandCompleted: false, output: 'out' } : {}), { status: 200 }); });
+    const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => { const url = String(input); calls.push({ url, init }); if (url.endsWith('/agents')) return new Response(JSON.stringify([agent]), { status: 200 }); if (url.endsWith('/execute')) return new Response(JSON.stringify({ task, commandCompleted: false, output: 'out' }), { status: 200 }); if (url.endsWith('/tasks')) return new Response(JSON.stringify(task), { status: 200 }); return new Response(null, { status: 204 }); });
     const adapter = new DesktopHttpAdapter({ baseURL: 'http://127.0.0.1:8787/', token: 'synthetic-session-token' }, fetcher);
-    await adapter.listAgents();
-    await adapter.createTask('opencode', 'goal', 'idem');
-    await adapter.execute('opencode', 'root', 'task');
-    await adapter.stop('opencode', 'root', 'task');
-    expect(calls.map(call => call.url)).toEqual(['http://127.0.0.1:8787/api/agents', 'http://127.0.0.1:8787/api/agents/opencode/tasks', 'http://127.0.0.1:8787/api/agents/opencode/tasks/root/task/execute', 'http://127.0.0.1:8787/api/agents/opencode/tasks/root/task/stop']);
+    expect(await adapter.listAgents()).toEqual([agent]);
+    expect(await adapter.createTask('opencode', 'goal', 'idem')).toEqual(task);
+    expect((await adapter.execute('opencode', 'root-1', 'task-1')).task.rootId).toBe('root-1');
+    await adapter.stop('opencode', 'root-1');
+    expect(calls.map(call => call.url)).toEqual(['http://127.0.0.1:8787/api/agents', 'http://127.0.0.1:8787/api/agents/opencode/tasks', 'http://127.0.0.1:8787/api/agents/opencode/tasks/root-1/task-1/execute', 'http://127.0.0.1:8787/api/agents/opencode/tasks/root-1/stop']);
     expect((calls[1].init?.headers as Record<string, string>).Authorization).toBe('Bearer synthetic-session-token');
     expect(JSON.parse(String(calls[1].init?.body))).toEqual({ goal: 'goal', idempotencyKey: 'idem', agentId: 'opencode' });
+    expect(calls[3].url).not.toContain('task-1');
   });
-  it('requires loopback and all server capability gates', () => {
-    expect(() => new DesktopHttpAdapter({ baseURL: 'https://example.test', token: 'x' })).toThrow();
-    const base = { agentId: 'opencode', installed: true, cliVerified: true, modelVerified: true, operations: ['execute', 'stop'] };
-    expect(canOperate(base, 'OpenCode')).toBe(true);
-    expect(canOperate({ ...base, operations: ['execute'] }, 'OpenCode')).toBe(false);
-    expect(canOperate({ ...base, modelVerified: false }, 'OpenCode')).toBe(false);
+  it('rejects unsafe bases, redirects, invalid JSON, and malformed bounded responses', async () => {
+    for (const baseURL of ['https://example.test/', 'http://localhost/user:pass@/', 'http://127.0.0.1/?token=x', 'http://127.0.0.1/api']) expect(() => new DesktopHttpAdapter({ baseURL, token: 'x' })).toThrow();
+    const redirect = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => { expect(init?.redirect).toBe('error'); throw new Error('redirect'); });
+    await expect(new DesktopHttpAdapter({ baseURL: 'http://[::1]/', token: 'x' }, redirect).listAgents()).rejects.toThrow('桌面服务请求失败');
+    const invalid = vi.fn(async () => new Response(JSON.stringify([{ ...agent, id: '' }]), { status: 200 }));
+    await expect(new DesktopHttpAdapter({ baseURL: 'http://localhost/', token: 'x' }, invalid).listAgents()).rejects.toThrow('格式无效');
+    const badTask = vi.fn(async () => new Response(JSON.stringify({ ...task, rootId: '' }), { status: 200 }));
+    await expect(new DesktopHttpAdapter({ baseURL: 'http://localhost/', token: 'x' }, badTask).createTask('opencode', 'goal', 'idem')).rejects.toThrow('格式无效');
+  });
+  it('requires create and execute plus all three verification gates, but not stop operation', () => {
+    expect(canOperate(agent, 'OpenCode')).toBe(true);
+    expect(canOperate({ ...agent, operations: ['create'] }, 'OpenCode')).toBe(false);
+    expect(canOperate({ ...agent, modelVerified: false }, 'OpenCode')).toBe(false);
+    expect(canOperate({ ...agent, installed: false }, 'OpenCode')).toBe(false);
   });
 });

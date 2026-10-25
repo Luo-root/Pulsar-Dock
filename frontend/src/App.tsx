@@ -191,13 +191,13 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
     if (!clean) return;
     const firstLine = clean.split('\n')[0];
     const title = Array.from(firstLine).slice(0, 24).join('');
-    const agentID = agents.find(agent => canOperate(agent, current.config.agent))?.agentId;
+    const agentID = agents.find(agent => canOperate(agent, current.config.agent))?.id;
     if (adapter && agentID) {
       setBusy(true); setConnectionError('');
       void (async () => {
         try {
           const created = await adapter.createTask(agentID, clean, crypto.randomUUID());
-          const rootID = created.parentId ?? created.id;
+          const rootID = created.rootId;
           activeTask.current = { agentID, rootID, taskID: created.id };
           const result = await adapter.execute(agentID, rootID, created.id);
           setConversations(items => items.map(item => item.id === selectedId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }, { id: `result-${crypto.randomUUID()}`, role: 'assistant', content: [{ type: 'text', text: result.output }] }], notice: result.commandCompleted ? 'Agent 已完成命令。' : 'Agent 已返回输出，但命令未报告完成。' } : item));
@@ -209,7 +209,7 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
     }
     setPage('conversation');
   };
-  const stopTask = () => { const task = activeTask.current; if (!task || !adapter) return; void adapter.stop(task.agentID, task.rootID, task.taskID).catch(error => setConnectionError(error instanceof Error ? error.message : '停止任务失败。')); };
+  const stopTask = () => { const task = activeTask.current; if (!task || !adapter) return; void adapter.stop(task.agentID, task.rootID).catch(error => setConnectionError(error instanceof Error ? error.message : '停止任务失败。')); };
 
   const connect = () => {
     try {
@@ -289,7 +289,7 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
                   onUpdate={updateCurrent}
                   onConfig={updateConfig}
                   onSend={sendMessage}
-                  canSend={!!adapter && canOperate(agents.find(agent => agent.agentId === (current.config.agent === 'Claude Code' ? 'claude' : current.config.agent === 'Codex' ? 'codex' : 'opencode')), current.config.agent)}
+                  canSend={!!adapter && canOperate(agents.find(agent => agent.id === (current.config.agent === 'Claude Code' ? 'claude' : current.config.agent === 'Codex' ? 'codex' : 'opencode')), current.config.agent)}
                   busy={busy}
                   onStop={stopTask}
                   onOpenWorkflow={() => selectPage('workflow')}
