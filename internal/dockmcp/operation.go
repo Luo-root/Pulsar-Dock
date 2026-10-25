@@ -3,6 +3,7 @@ package dockmcp
 import (
 	"context"
 
+	"github.com/Luo-root/pulsar-dock/internal/artifactstore"
 	"github.com/Luo-root/pulsar-dock/internal/taskstore"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -100,14 +101,45 @@ func (s *Service) runPersistentStatus(ctx context.Context, id RequestIdentity, i
 	return nil, out, nil
 }
 
-func (s *Service) runPersistentPublish(ctx context.Context, id RequestIdentity) (*mcp.CallToolResult, PublishOutput, error) {
+func (s *Service) runPersistentPublish(ctx context.Context, id RequestIdentity, input PublishInput) (*mcp.CallToolResult, PublishOutput, error) {
 	opctx, grant, op, err := s.beginOperation(ctx, id, ActionPublish)
 	if err != nil {
 		return nil, PublishOutput{}, err
 	}
-	_, err = s.persistentRoot(opctx, grant)
-	if err == nil {
+	root, err := s.persistentRoot(opctx, grant)
+	var out PublishOutput
+	if err == nil && s.persistent.artifacts == nil {
 		err = ErrArtifactUnsupported
 	}
-	return nil, PublishOutput{}, s.finishOperation(opctx, id, ActionPublish, op, err)
+	if err == nil && input.TaskID != grant.RootTaskID {
+		// A root capability cannot publish on behalf of a child environment.
+		err = ErrUnauthorized
+	}
+	if err == nil {
+		err = validatePersistentPublish(input)
+	}
+	if err == nil {
+		err = s.checkOperation(opctx, id, ActionPublish)
+	}
+	if err == nil {
+		var meta artifactstore.Metadata
+		meta, err = s.persistent.artifacts.Put(opctx, artifactstore.PutRequest{
+			Scope:         artifactstore.Scope{CallerID: grant.CallerID, RootID: root.RootID, TaskID: root.ID},
+			EnvironmentID: root.EnvironmentID, Kind: input.Kind, BaselineDigest: input.BaselineDigest,
+			IdempotencyKey: input.IdempotencyKey, Bytes: []byte(input.Payload),
+		})
+		if err == nil {
+			out = PublishOutput{ArtifactID: meta.ID, State: "published"}
+		}
+	}
+	if err == nil {
+		_, err = s.persistentRoot(opctx, grant)
+	}
+	// A commit may survive cancellation. Never delete an immutable snapshot or
+	// report success after invalidation; trusted recovery owns retained snapshots.
+	err = s.finishOperation(opctx, id, ActionPublish, op, err)
+	if err != nil {
+		return nil, PublishOutput{}, err
+	}
+	return nil, out, nil
 }

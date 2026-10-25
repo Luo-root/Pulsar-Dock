@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/Luo-root/pulsar-dock/internal/artifactstore"
 	"github.com/Luo-root/pulsar-dock/internal/controller"
 	"github.com/Luo-root/pulsar-dock/internal/taskstore"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -24,7 +25,29 @@ type TaskReader interface {
 	RevokeRoot(context.Context, taskstore.Scope) error
 }
 
+// ArtifactStore is trusted host wiring, never selected from tool arguments.
+// Only immutable publication is exposed; reads and propagation remain separate.
+// The host owns its lifecycle and private-directory provisioning.
+type ArtifactStore interface {
+	Put(context.Context, artifactstore.PutRequest) (artifactstore.Metadata, error)
+}
+
+// NewPersistentServiceWithArtifactStore explicitly enables persistent publication.
+// The original constructor remains fail-closed without an ArtifactStore.
+func NewPersistentServiceWithArtifactStore(auth RequestAuthenticator, callerID string, ctl ChildController, store TaskReader, artifacts ArtifactStore) (*Service, error) {
+	if artifacts == nil {
+		return nil, errors.New("artifact store required")
+	}
+	s, err := NewPersistentService(auth, callerID, ctl, store)
+	if err != nil {
+		return nil, err
+	}
+	s.persistent.artifacts = artifacts
+	return s, nil
+}
+
 type persistentTasks struct {
+	artifacts    ArtifactStore
 	caller       string
 	controller   ChildController
 	store        TaskReader
