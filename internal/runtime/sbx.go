@@ -291,12 +291,12 @@ func (b *SbxBackend) Check(ctx context.Context) Diagnostics {
 	return d
 }
 func validRules(rules []NetworkRule) error {
-	seen := map[int]bool{}
+	seen := map[string]bool{}
 	for _, r := range rules {
-		if r.Host != "localhost" || r.Action != "allow" || r.Port < 1 || r.Port > 65535 || seen[r.Port] {
+		if (r.Host != "localhost" && r.Host != "host.docker.internal") || r.Action != "allow" || r.Port < 1 || r.Port > 65535 || seen[r.Host+":"+strconv.Itoa(r.Port)] {
 			return berr(ErrDenied, "network", "only unique localhost exact-port allow rules supported")
 		}
-		seen[r.Port] = true
+		seen[r.Host+":"+strconv.Itoa(r.Port)] = true
 	}
 	return nil
 }
@@ -592,7 +592,7 @@ func (b *SbxBackend) network(ctx context.Context, m *managed, rules []NetworkRul
 	}
 	expected := map[string]bool{}
 	for _, r := range rules {
-		expected["localhost:"+strconv.Itoa(r.Port)] = true
+		expected[r.Host+":"+strconv.Itoa(r.Port)] = true
 	}
 	if err := b.policies(ctx, m.env.Name, m.grants); err != nil {
 		return b.failStop(m, err)
@@ -609,7 +609,7 @@ func (b *SbxBackend) network(ctx context.Context, m *managed, rules []NetworkRul
 	added := []string{}
 	var failure error
 	for _, r := range rules {
-		resource := "localhost:" + strconv.Itoa(r.Port)
+		resource := r.Host + ":" + strconv.Itoa(r.Port)
 		if m.grants[resource] {
 			continue
 		}

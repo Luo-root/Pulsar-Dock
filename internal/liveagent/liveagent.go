@@ -20,9 +20,9 @@ import (
 const (
 	ClaudeID      = "claude"
 	ClaudeVersion = agentadapter.ClaudeVersion
-	ClaudeCLIPath = "/opt/pulsar-agents/claude"
+	ClaudeCLIPath = "/home/agent/.local/bin/claude"
 	ClaudeConfig  = agentadapter.GuestMCPConfigPath
-	ClaudeModel   = "deepseek/deepseek-flash[1m]"
+	ClaudeModel   = "minimax-code/MiniMax-M3.1-Flash"
 	GateHost      = "127.0.0.1"
 	GatePort      = 3425
 
@@ -90,7 +90,7 @@ type modelInstance struct {
 }
 
 func (v *ClaudeVerifier) Verify(ctx context.Context, env runtime.Environment) error {
-	if v == nil || v.Backend == nil || env.ID == "" || env.Backend != v.Backend.Name() || env.Agent != ClaudeID || filepath.Clean(v.Staging) != v.Staging || !filepath.IsAbs(v.Staging) {
+	if v == nil || v.Backend == nil || env.ID == "" || env.Backend != v.Backend.Name() || env.Agent != "shell" || filepath.Clean(v.Staging) != v.Staging || !filepath.IsAbs(v.Staging) {
 		return ErrUnsupported
 	}
 	if err := v.prepare(ctx, env); err != nil {
@@ -138,7 +138,10 @@ func (v *ClaudeVerifier) prepare(ctx context.Context, env runtime.Environment) e
 	_, portText, _ := net.SplitHostPort(ln.Addr().String())
 	var port int
 	_, _ = fmt.Sscan(portText, &port)
-	if err = v.Backend.SetNetworkPolicy(ctx, env, []runtime.NetworkRule{{Host: "localhost", Port: port, Action: "allow"}}); err != nil {
+	if err = v.Backend.SetNetworkPolicy(ctx, env, []runtime.NetworkRule{
+		{Host: "host.docker.internal", Port: port, Action: "allow"},
+		{Host: "localhost", Port: port, Action: "allow"},
+	}); err != nil {
 		_ = server.Close()
 		proxy.Close()
 		return errors.Join(ErrUnsupported, err)
@@ -150,14 +153,14 @@ func (v *ClaudeVerifier) prepare(ctx context.Context, env runtime.Environment) e
 			proxy.Close()
 		}
 	}()
-	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: []string{"mkdir", "-p", "--", "/tmp/pulsar-dock", "/etc/pulsar-agents", "/opt/pulsar-agents"}}); err != nil {
+	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: []string{"mkdir", "-p", "--", "/tmp/pulsar-dock", "/etc/pulsar-agents/claude", "/opt/pulsar-agents"}}); err != nil {
 		return errors.Join(ErrUnsupported, err)
 	}
 	token := proxy.GuestToken()
 	files := map[string][]byte{
-		"mcp.json": []byte("{}\n"),
+		"mcp.json": []byte("{\"mcpServers\":{}}\n"),
 		"token":    []byte(token + "\n"),
-		"launcher": []byte("#!/bin/sh\nset -eu\nexport ANTHROPIC_BASE_URL=http://host.docker.internal:" + portText + "\nexport ANTHROPIC_API_KEY=$(cat " + claudeToken + ")\nexec " + ClaudeCLIPath + " \"$@\"\n"),
+		"launcher": []byte("#!/bin/sh\nset -eu\nexport ANTHROPIC_BASE_URL=http://host.docker.internal:" + portText + "\nexport ANTHROPIC_API_KEY=$(cat " + claudeToken + ")\nexport ANTHROPIC_AUTH_TOKEN=\"$ANTHROPIC_API_KEY\"\nexec " + ClaudeCLIPath + " \"$@\"\n"),
 	}
 	for name, data := range files {
 		tmp, e := os.CreateTemp(v.Staging, "claude-")
@@ -189,9 +192,6 @@ func (v *ClaudeVerifier) prepare(ctx context.Context, env runtime.Environment) e
 			proxy.Close()
 			return errors.Join(ErrUnsupported, e)
 		}
-	}
-	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: []string{"mv", "--", "/tmp/pulsar-dock/mcp.json", ClaudeConfig}}); err != nil {
-		return errors.Join(ErrUnsupported, err)
 	}
 	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: []string{"mv", "--", "/tmp/pulsar-dock/claude-token", claudeToken}}); err != nil {
 		return errors.Join(ErrUnsupported, err)

@@ -23,7 +23,7 @@ func TestRealModelRoute(t *testing.T) {
 	if os.Getenv("PULSAR_REAL_MODEL_ROUTE") != "1" {
 		t.Skip("explicit real model API opt-in required")
 	}
-	const model = "deepseek/deepseek-flash[1m]"
+	const model = "minimax-code/MiniMax-M3.1-Flash"
 	proxy, err := modelproxy.New(modelproxy.Config{UpstreamURL: "http://127.0.0.1:3425", UpstreamToken: "magpie", Model: model, Timeout: 90 * time.Second, MaxResponseBytes: 1 << 20})
 	if err != nil {
 		t.Fatal("proxy configuration failed")
