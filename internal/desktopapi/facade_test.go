@@ -42,9 +42,18 @@ func (backend) Inspect(_ context.Context, e runtime.Environment) (runtime.Enviro
 	return e, nil
 }
 
+func canonicalTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func openFacade(t *testing.T, caller string) (*Facade, *taskstore.Store) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "tasks.db")
+	path := filepath.Join(canonicalTestDir(t), "tasks.db")
 	store, err := taskstore.Open(path)
 	if err != nil {
 		t.Fatal(err)

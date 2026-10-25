@@ -61,7 +61,7 @@ func (executionVerifier) Verify(context.Context, runtime.Environment) error { re
 
 func executionHTTPFacade(t *testing.T) (*Facade, taskstore.Task) {
 	t.Helper()
-	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.db"))
+	store, err := taskstore.Open(filepath.Join(canonicalTestDir(t), "tasks.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

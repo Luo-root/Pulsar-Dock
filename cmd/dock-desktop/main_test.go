@@ -16,6 +16,15 @@ import (
 	"github.com/Luo-root/pulsar-dock/internal/desktopapi"
 )
 
+func canonicalTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func testHandlerFactory(facades map[string]*desktopapi.Facade, cfg desktopapi.HTTPConfig) (http.Handler, error) {
 	if len(facades) != 3 || cfg.Token == "" || len(cfg.AllowedOrigins) != 1 {
 		return nil, errors.New("unexpected handler config")
@@ -30,7 +39,7 @@ func testHandlerFactory(facades map[string]*desktopapi.Facade, cfg desktopapi.HT
 }
 
 func TestCloseAllowsSameDirectoryRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	for i := 0; i < 2; i++ {
 		s, err := Start(context.Background(), dir, "http://127.0.0.1:15353", "127.0.0.1:0", testHandlerFactory)
 		if err != nil {
@@ -49,7 +58,7 @@ func TestCloseAllowsSameDirectoryRestart(t *testing.T) {
 }
 
 func TestWriteBootstrapIsRandomAndPrivate(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	path, b, err := writeBootstrap(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +95,7 @@ func TestStartRejectsNonLoopback(t *testing.T) {
 }
 
 func TestStartRealHTTPRequestUsesActualHost(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s, err := Start(ctx, filepath.Clean(dir), "http://127.0.0.1:15353", "127.0.0.1:0", desktopapi.NewHTTPHandler)
@@ -120,7 +129,7 @@ func readBootstrapToken(t *testing.T, path string) string {
 }
 
 func TestStartShutdownIsBounded(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	s, err := Start(ctx, filepath.Clean(dir), "http://127.0.0.1:15353", "127.0.0.1:0", func(map[string]*desktopapi.Facade, desktopapi.HTTPConfig) (http.Handler, error) {
 		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
