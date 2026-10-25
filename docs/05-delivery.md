@@ -111,7 +111,7 @@ CI 优先覆盖不需要真实账户的策略、适配配置和合成集成测�
 | Skill 兼容 | 各 Harness 的发现、加载、脚本与引用、权限拒绝 | 有实际运行证据才标支持 |
 | 多 Harness 对比 | 相同输入、验收与权限下的独立执行 | 模型与预算不同则标为整套配置对比 |
 
-技术栈建议见 [06](06-technology-selection.md)，本机实际底座测试见 [07](07-sandbox-validation.md)，真实 Claude-in-sbx 竖向链路见 [08](08-claude-in-sbx-validation.md)：Go 已升级，sbx 双环境和 Claude + Magpie + MCP + Dock 工具路径有证据。下一阶段重点是真实 MCP/Skill、任务实际创建环境、固定快照成果交接与生产凭据通路。尚未构建完整 Dock UI。
+技术栈建议见 [06](06-technology-selection.md)，本机实际底座测试见 [07](07-sandbox-validation.md)，真实 Claude-in-sbx 竖向链路见 [08](08-claude-in-sbx-validation.md)：Go 已升级，sbx 双环境和 Claude + Magpie + MCP + Dock 工具路径有证据。下一阶段重点是真实 MCP/Skill、任务实际创建环境、固定快照成果交接与生产凭据通路。当前已具备 React 项目会话式 UI 原型，但尚未完成 Wails 桌面壳联调、安装包或真实 Agent 端到端界面验收。
 
 ## 8. 平台打包与合并门禁
 

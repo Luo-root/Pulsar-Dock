@@ -1,72 +1,316 @@
 import { useEffect, useRef, useState } from 'react';
-import { disconnectedBridge, disconnectedSnapshot, parseSnapshot, type HostBridge, type Snapshot, type TaskState } from './bridge';
+import { Menu, PanelRightOpen } from 'lucide-react';
+import { disconnectedBridge, disconnectedSnapshot, parseSnapshot, type HostBridge, type Snapshot } from './bridge';
+import { canOperate, DesktopHttpAdapter, type AgentInfo, type ConnectionConfig, type DesktopClient } from './httpAdapter';
+import { Chat } from './components/Chat';
+import { HostConversation, ManagementPage } from './components/Pages';
+import { SearchDialog } from './components/SearchDialog';
+import { SettingsDialog, type SettingsTab } from './components/SettingsDialog';
+import { Sidebar } from './components/Sidebar';
+import { Button, Hint } from './components/ui';
+import { WorkspacePanel } from './components/WorkspacePanel';
+import { createConversation, defaultConfig, demoConversation } from './data';
+import type { AgentKind, Conversation, Page, Preferences, SessionConfig, WorkspaceTab } from './types';
 import './styles.css';
 
-const pages = ['工作台', '连接', '成果', '设置'] as const;
-const tabs = ['状态', '事件', '成果', '权限'] as const;
-const stateLabels: Record<TaskState, string> = { created: '已创建', preparing: '准备中', running: '运行中', waiting_approval: '等待审批', stopping: '停止中', succeeded: '已完成', failed: '失败', stopped: '已停止', expired: '已到期' };
-type Preferences = { theme: 'light' | 'dark'; inspector: boolean };
+const unavailable = '当前仅提供只读状态接口，未接入可信操作桥；不能创建、启动、停止、撤权或应用成果。';
+const defaultPreferences: Preferences = { theme: 'light', inspector: false, compact: false };
+
 function loadPreferences(): Preferences {
   try {
-    const v: unknown = JSON.parse(localStorage.getItem('pulsar-dock.preferences') ?? 'null');
-    if (v && typeof v === 'object' && 'theme' in v && 'inspector' in v && (v.theme === 'light' || v.theme === 'dark') && typeof v.inspector === 'boolean') return { theme: v.theme, inspector: v.inspector };
-  } catch { /* Unavailable or invalid storage is not a connection failure. */ }
-  return { theme: 'light', inspector: true };
+    const value: unknown = JSON.parse(localStorage.getItem('pulsar-dock.preferences') ?? 'null');
+    if (value && typeof value === 'object' && 'theme' in value && 'inspector' in value && (value.theme === 'light' || value.theme === 'dark') && typeof value.inspector === 'boolean') {
+      return { theme: value.theme, inspector: value.inspector, compact: 'compact' in value && value.compact === true };
+    }
+  } catch { /* Invalid or unavailable storage does not affect the host connection. */ }
+  return defaultPreferences;
 }
-export default function App({ bridge = disconnectedBridge }: { bridge?: HostBridge }) {
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, [query]);
+  return matches;
+}
+
+export default function App({ bridge = disconnectedBridge, adapterFactory = config => new DesktopHttpAdapter(config) }: { bridge?: HostBridge; adapterFactory?: (config: ConnectionConfig) => DesktopClient }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(disconnectedSnapshot);
   const [error, setError] = useState('');
-  const [page, setPage] = useState<typeof pages[number]>('工作台');
-  const [tab, setTab] = useState<typeof tabs[number]>('状态');
-  const [selectedId, select] = useState<string | null>(null);
-  const [treeOpen, setTreeOpen] = useState(true);
-  const [preferences, setPreferences] = useState(loadPreferences);
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [page, setPage] = useState<Page>('home');
+  const [conversations, setConversations] = useState<Conversation[]>(() => [createConversation('draft-1'), demoConversation]);
+  const [selectedId, setSelectedId] = useState('draft-1');
+  const [hostTaskId, setHostTaskId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [preferences, setPreferences] = useState<Preferences>(loadPreferences);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('resources');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('通用');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [connection, setConnection] = useState<ConnectionConfig>({ baseURL: 'http://127.0.0.1:8787', token: '' });
+  const [adapter, setAdapter] = useState<DesktopClient | null>(null);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [connectionError, setConnectionError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const activeTask = useRef<{ generation: number; conversationId: string; adapter: DesktopClient; agentID: string; rootID: string; taskID: string } | null>(null);
+  const operationGeneration = useRef(0);
+  const connectionGeneration = useRef(0);
+  const mobile = useMediaQuery('(max-width: 760px)');
+  const counter = useRef(1);
+  const settingsReturnFocus = useRef<HTMLElement | null>(null);
+  const searchReturnFocus = useRef<HTMLElement | null>(null);
+  const mobileReturnFocus = useRef<HTMLElement | null>(null);
+  const mobileWasOpen = useRef(false);
+  const sidebarRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     let active = true;
     let receivedUpdate = false;
-    setSnapshot(disconnectedSnapshot); setError(''); select(null);
+    setSnapshot(disconnectedSnapshot);
+    setError('');
+    setHostTaskId(null);
+    setPage('home');
     const accept = (value: unknown) => {
       if (!active) return;
       try { setSnapshot(parseSnapshot(value)); setError(''); }
-      catch { setSnapshot(disconnectedSnapshot); setError('主机状态格式无效，已拒绝展示。请检查桌面连接版本。'); }
+      catch {
+        setSnapshot(disconnectedSnapshot);
+        setHostTaskId(null);
+        setPage('home');
+        setError('主机状态格式无效，已拒绝展示。请检查桌面连接版本。');
+      }
     };
     let unsubscribe = () => {};
     try {
       unsubscribe = bridge.subscribe(value => { receivedUpdate = true; accept(value); });
       void bridge.getSnapshot().then(value => { if (!receivedUpdate) accept(value); }).catch(() => {
-        if (active && !receivedUpdate) { setSnapshot(disconnectedSnapshot); setError('无法读取主机状态。请在可信桌面应用中检查连接，无需在此输入凭据。'); }
+        if (active && !receivedUpdate) {
+          setSnapshot(disconnectedSnapshot);
+          setHostTaskId(null);
+          setPage('home');
+          setError('无法读取主机状态。请在可信桌面应用中检查连接，无需在此输入凭据。');
+        }
       });
-    } catch { active = false; setSnapshot(disconnectedSnapshot); setError('无法订阅主机状态。请检查桌面连接。'); }
+    } catch {
+      active = false;
+      setSnapshot(disconnectedSnapshot);
+      setHostTaskId(null);
+      setPage('home');
+      setError('无法订阅主机状态。请检查桌面连接。');
+    }
     return () => { active = false; unsubscribe(); };
   }, [bridge]);
+
   useEffect(() => {
-    try { localStorage.setItem('pulsar-dock.preferences', JSON.stringify(preferences)); } catch { /* Preferences remain usable in memory. */ }
+    document.documentElement.dataset.theme = preferences.theme;
+    document.documentElement.style.colorScheme = preferences.theme;
+    try { localStorage.setItem('pulsar-dock.preferences', JSON.stringify(preferences)); } catch { /* Preferences remain available in memory. */ }
   }, [preferences]);
-  const task = snapshot.tasks.find(t => t.id === selectedId);
-  const events = snapshot.events.filter(e => e.taskId === task?.id);
-  const artifacts = snapshot.artifacts.filter(a => a.taskId === task?.id);
-  const unavailable = '当前仅提供只读状态接口，未接入可信操作桥；不能创建、启动、停止、撤权或应用成果。';
-  const toggleInspector = () => setPreferences(p => ({ ...p, inspector: !p.inspector }));
-  const artifactList = (all = false) => {
-    const items = all ? snapshot.artifacts : artifacts;
-    return items.length ? <ul className="records">{items.map(a => <li key={a.id}><strong>{a.name}</strong><span className="mono digest">SHA-256 {a.digest}</span></li>)}</ul> : <Empty title="尚无成果快照" description="成果由主机提供不可变引用后显示。任务完成不代表改动已应用。" />;
+
+  useEffect(() => {
+    if (hostTaskId && !snapshot.tasks.some(task => task.id === hostTaskId)) {
+      setHostTaskId(null);
+      setPage('home');
+    }
+  }, [hostTaskId, snapshot.tasks]);
+
+  useEffect(() => {
+    if (!mobile && mobileOpen) setMobileOpen(false);
+  }, [mobile, mobileOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) {
+      if (mobileWasOpen.current) {
+        mobileWasOpen.current = false;
+        mobileReturnFocus.current?.focus();
+      }
+      return;
+    }
+    mobileWasOpen.current = true;
+    const frame = requestAnimationFrame(() => sidebarRef.current?.querySelector<HTMLElement>('button')?.focus());
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setMobileOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [mobileOpen]);
+
+  const current = conversations.find(item => item.id === selectedId) ?? conversations[0];
+  const hostTask = snapshot.tasks.find(item => item.id === hostTaskId);
+  const chatVisible = page === 'home' || page === 'conversation';
+
+  const updateCurrent = (patch: Partial<Conversation>) => {
+    setConversations(items => items.map(item => item.id === selectedId ? { ...item, ...patch } : item));
   };
-  return <div className="app" data-theme={preferences.theme}>
-    <a className="skip" href="#main">跳到主内容</a>
-    <header className="topbar"><div className="brand"><span className="brand-mark" aria-hidden="true">⠿</span><strong>Pulsar Dock</strong><span className="brand-caption">安全协作工作台</span></div><span className="connection"><i aria-hidden="true" />{snapshot.connection === 'connected' ? '主机已连接 · 只读' : '主机未连接'}</span></header>
-    <nav className="navigation" aria-label="主导航">{pages.map((p, i) => <button key={p} aria-current={page === p ? 'page' : undefined} onClick={() => setPage(p)}><span className="nav-symbol" aria-hidden="true">{['▦', '⌁', '▱', '⚙'][i]}</span>{p}</button>)}<span className="nav-note mono">LOCAL / READ ONLY</span></nav>
-    <div className="notice" role="status"><span className="notice-label">{error ? '状态不可用' : snapshot.connection === 'connected' ? '只读连接' : '等待桌面连接'}</span><span>{error || (snapshot.connection === 'connected' ? '仅展示主机报告的数据，操作接口尚未接线。' : '尚未接入主机。任务、权限与成果将在可信连接建立后显示。')}</span></div>
-    <div className={`workspace ${treeOpen ? '' : 'tree-closed'} ${preferences.inspector ? '' : 'inspector-closed'}`}>
-      <aside className="task-panel" aria-label="任务树"><div className="panel-heading"><h2>{treeOpen ? '任务' : '树'}</h2><button className="icon-button" aria-label={treeOpen ? '折叠任务树' : '展开任务树'} aria-expanded={treeOpen} onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? '‹' : '›'}</button></div>{treeOpen && <><div className="tree-summary"><span>全部任务</span><span className="mono">{snapshot.tasks.length}</span></div>{snapshot.tasks.length ? <ul className="task-list">{snapshot.tasks.map(t => <li key={t.id}><button className={`task-node ${task?.id === t.id ? 'selected' : ''}`} onClick={() => select(t.id)} aria-pressed={task?.id === t.id}><span>{t.parentId ? '↳ ' : ''}{t.title}</span><small>{stateLabels[t.state]}</small><span className="permission-track" aria-label={`权限轨道：${t.permissions.length}项主机报告权限`}>{t.permissions.length ? t.permissions.map((p, i) => <span key={i} title={p}>{p}</span>) : <span className="no-grant">无权限记录</span>}</span></button></li>)}</ul> : <div className="tree-empty"><span className="tree-glyph" aria-hidden="true">└ ─</span><p>还没有任务</p><small>连接后查看真实任务树与协作者。</small></div>}<div className="tree-footer"><span className="legend-line" />权限轨道随任务展示<br /><small>不推测环境或授权状态</small></div></>}</aside>
-      <main id="main" tabIndex={-1}>
-        <div className="main-heading"><div><span className="eyebrow">{page === '工作台' ? '任务执行' : '本地控制台'}</span><h1>{page === '工作台' ? task?.title ?? '工作台' : page}</h1></div><button className="quiet" onClick={toggleInspector} aria-expanded={preferences.inspector}>{preferences.inspector ? '收起检查器' : '展开检查器'}</button></div>
-        {page === '工作台' ? <><div className="actionbar"><div className="actions"><button disabled aria-describedby="action-reason">＋ 创建任务</button><button disabled aria-describedby="action-reason">启动</button><button disabled aria-describedby="action-reason">停止</button></div><span className="mono">{task ? stateLabels[task.state] : 'NO TASK SELECTED'}</span></div><p id="action-reason" className="action-reason">{unavailable}</p><div className="tabs" role="tablist" aria-label="任务详情">{tabs.map((t, index) => <button id={`tab-${index}`} key={t} ref={el => { tabRefs.current[index] = el; }} role="tab" aria-selected={tab === t} aria-controls="task-details" tabIndex={tab === t ? 0 : -1} onClick={() => setTab(t)} onKeyDown={e => { let next = index; if (e.key === 'ArrowRight') next = (index + 1) % tabs.length; else if (e.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length; else if (e.key === 'Home') next = 0; else if (e.key === 'End') next = tabs.length - 1; else return; e.preventDefault(); setTab(tabs[next]); tabRefs.current[next]?.focus(); }}>{t}</button>)}</div><section className="details" id="task-details" role="tabpanel" aria-labelledby={`tab-${tabs.indexOf(tab)}`} tabIndex={0}>{tab === '状态' ? task ? <><h2>主机报告状态</h2><dl><dt>任务标识</dt><dd className="mono">{task.id}</dd><dt>状态</dt><dd>{stateLabels[task.state]}</dd><dt>环境与进度</dt><dd>此接口未提供，不推测运行环境或完成比例。</dd></dl></> : <Empty title="从一个真实任务开始" description="当前没有选中的任务。先检查桌面连接；主机接入后，可在左侧选择任务查看状态。"><button className="primary" onClick={() => setPage('连接')}>查看连接状态 <span aria-hidden="true">→</span></button></Empty> : tab === '事件' ? events.length ? <ul className="records">{events.map(e => <li key={e.id}>{e.summary}</li>)}</ul> : <Empty title="暂无任务事件" description="只展示主机上报的事件，不生成模拟运行日志。" /> : tab === '成果' ? artifactList() : <><h2>权限记录</h2>{task?.permissions.length ? <ul className="records">{task.permissions.map((p, i) => <li key={i}>{p}</li>)}</ul> : <p className="muted">没有可展示的权限记录。未报告不等于已授权。</p>}</>}</section><div className="execution-note"><span aria-hidden="true">⌘</span><div><strong>原生交互尚未接线</strong><p>此区域不会执行命令、打开 Agent 页面或自动连接模型。</p></div></div></> : page === '连接' ? <section className="page-content"><h2>可信桌面连接</h2><p>主机{snapshot.connection === 'connected' ? '已连接，当前接口只读。' : '未连接。请在 Pulsar Dock 桌面壳中接入只读 HostBridge。'}</p><dl><dt>状态读取</dt><dd className="mono">getSnapshot / subscribe</dd><dt>模型与 MCP</dt><dd>尚未接线，不进行网络探测</dd><dt>凭据</dt><dd>此页面不收集密钥。请勿将凭据粘贴到任务或事件中。</dd></dl><button disabled aria-describedby="action-reason-connect">检查连接</button><p id="action-reason-connect" className="muted">主动诊断接口尚未接入；当前仅接收主机状态。</p></section> : page === '成果' ? <section className="page-content"><h2>不可变成果</h2>{artifactList(true)}<button disabled aria-describedby="apply-reason">应用成果</button><p id="apply-reason" className="muted">应用接口尚未接线。后续须由用户确认并核对原项目基线。</p></section> : <section className="page-content"><h2>界面偏好</h2><p className="muted">仅保存到此设备的浏览器存储，不更改主机策略。</p><label className="setting">主题<select value={preferences.theme} onChange={e => setPreferences(p => ({ ...p, theme: e.target.value as Preferences['theme'] }))}><option value="light">浅色 · 冷灰蓝</option><option value="dark">深色 · 墨蓝</option></select></label><label className="setting"><span>显示权限与成果检查器</span><input type="checkbox" checked={preferences.inspector} onChange={toggleInspector} /></label><div className="settings-limit"><h2>主机设置尚未接线</h2><p>安全策略、凭据库、环境清理和日志导出不能在此修改。</p></div></section>}
-      </main>
-      {preferences.inspector && <aside className="inspector" aria-label="权限与成果检查器"><div className="panel-heading"><h2>检查器</h2><span className="mono">READ ONLY</span></div><section><span className="eyebrow">选中任务</span><h3>{task?.title ?? '未选择任务'}</h3><p className="muted">{task ? stateLabels[task.state] : '选择任务后查看权限和成果引用。'}</p></section><section><div className="section-label"><h3>权限边界</h3><span className="tag">待核对</span></div><p className="muted">{task ? `主机报告 ${task.permissions.length} 项权限记录；完整授权范围需由可信控制面核对。` : '尚无任务权限记录，不能确认任何执行能力。'}</p><button disabled aria-describedby="revoke-reason">撤销权限</button><p className="fine" id="revoke-reason">{unavailable}</p></section><section><h3>成果快照</h3><p className="muted">{task ? `${artifacts.length} 项成果引用` : '无选中任务'}</p><p className="fine">成果不会自动写回原项目，也不会自动提交或发布。</p></section><div className="boundary-note"><span className="mono">TRUST BOUNDARY</span><p>任务内容仅作为文本展示。界面不执行其中的链接或指令。</p></div></aside>}
-    </div><footer className="statusbar"><span>◯ {snapshot.connection === 'connected' ? '只读状态流' : '未建立主机连接'}</span><span>任务 {snapshot.tasks.length} <span aria-hidden="true"> / </span> 成果 {snapshot.artifacts.length}</span><span>未启用执行接口</span></footer>
-  </div>;
-}
-function Empty({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) {
-  return <div className="empty"><div className="empty-diagram" aria-hidden="true"><span /> <i /> <span /></div><h2>{title}</h2><p>{description}</p>{children}</div>;
+  const updateConfig = (patch: Partial<SessionConfig>) => {
+    setConversations(items => items.map(item => item.id === selectedId ? { ...item, config: { ...item.config, ...patch } } : item));
+  };
+  const updatePreferences = (patch: Partial<Preferences>) => setPreferences(value => ({ ...value, ...patch }));
+
+  const quickChat = (agent?: AgentKind) => {
+    setHostTaskId(null);
+    setMobileOpen(false);
+    if (!agent && page === 'home' && !current.demo && !current.messages.length) {
+      setPage('home');
+      return;
+    }
+    const id = `draft-${++counter.current}`;
+    const next = createConversation(id);
+    if (agent) next.config = { ...defaultConfig, agent };
+    setConversations(items => [...items, next]);
+    setSelectedId(id);
+    setPage('home');
+  };
+
+  const selectConversation = (id: string) => {
+    const next = conversations.find(item => item.id === id);
+    if (!next) return;
+    setSelectedId(id);
+    setHostTaskId(null);
+    setPage(next.messages.length ? 'conversation' : 'home');
+    setMobileOpen(false);
+  };
+
+  const selectPage = (next: Page) => {
+    setPage(next);
+    setHostTaskId(null);
+    setMobileOpen(false);
+  };
+
+  const sendMessage = (text: string) => {
+    const clean = text.trim();
+    if (!clean || operationGeneration.current !== 0) return;
+    const firstLine = clean.split('\n')[0];
+    const title = Array.from(firstLine).slice(0, 24).join('');
+    const conversationId = selectedId;
+    const selectedConversation = current;
+    const agentID = agents.find(agent => canOperate(agent, selectedConversation.config.agent))?.id;
+    if (adapter && agentID) {
+      const operationAdapter = adapter;
+      const generation = ++operationGeneration.current;
+      setBusy(true); setConnectionError('');
+      void (async () => {
+        try {
+          const created = await operationAdapter.createTask(agentID, clean, crypto.randomUUID());
+          const rootID = created.rootId;
+          activeTask.current = { generation, conversationId, adapter: operationAdapter, agentID, rootID, taskID: created.id };
+          const result = await operationAdapter.execute(agentID, rootID, created.id);
+          if (operationGeneration.current !== generation) return;
+          setConversations(items => items.map(item => item.id === conversationId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }, { id: `result-${crypto.randomUUID()}`, role: 'assistant', content: [{ type: 'text', text: result.output }] }], notice: result.commandCompleted ? 'Agent 已完成命令。' : 'Agent 已返回输出，但命令未报告完成。' } : item));
+        } catch (error) { if (operationGeneration.current === generation) setConnectionError(error instanceof Error ? error.message : 'Agent 请求失败。'); }
+        finally { if (operationGeneration.current === generation) { activeTask.current = null; operationGeneration.current = 0; setBusy(false); } }
+      })();
+    } else {
+      setConversations(items => items.map(item => item.id === selectedId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }], notice: '已保留在本地预览，未调用模型、未创建任务，也未启动 Agent。' } : item));
+    }
+    setPage('conversation');
+  };
+  const stopTask = () => { const task = activeTask.current; if (!task) return; void task.adapter.stop(task.agentID, task.rootID).catch(error => { if (operationGeneration.current === task.generation) setConnectionError(error instanceof Error ? error.message : '停止任务失败.'); }); };
+
+  const connect = () => {
+    const generation = ++connectionGeneration.current;
+    try {
+      const next = adapterFactory(connection);
+      setAdapter(null); setAgents([]); setConnectionError('');
+      void next.listAgents().then(directory => { if (connectionGeneration.current === generation) { setAdapter(next); setAgents(directory); } }).catch(error => { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '读取 Agent 失败。'); } });
+    } catch (error) { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '连接配置无效。'); } }
+  };
+  const openSettings = (tab: SettingsTab = '通用') => {
+    settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSettingsTab(tab);
+    setSearchOpen(false);
+    setMobileOpen(false);
+    setSettingsOpen(true);
+  };
+  const openSearch = () => {
+    searchReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setQuery('');
+    setSettingsOpen(false);
+    setMobileOpen(false);
+    setSearchOpen(true);
+  };
+  useEffect(() => {
+    const keyboardSearch = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
+        event.preventDefault();
+        openSearch();
+      }
+    };
+    document.addEventListener('keydown', keyboardSearch);
+    return () => document.removeEventListener('keydown', keyboardSearch);
+  }, []);
+  const openWorkspace = (tab: WorkspaceTab) => {
+    setWorkspaceTab(tab);
+    updatePreferences({ inspector: true });
+  };
+
+  return (
+    <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${preferences.compact ? 'compact' : ''}`} data-theme={preferences.theme}>
+      <a className="skip" href="#main">跳到主内容</a>
+      {mobile && mobileOpen && <button className="mobile-overlay" aria-label="关闭导航遮罩" onClick={() => setMobileOpen(false)} />}
+      <div className="desktop">
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          mobile={mobile}
+          mobileOpen={mobileOpen}
+          sidebarRef={sidebarRef}
+          page={page}
+          conversations={conversations}
+          selectedId={selectedId}
+          hostTaskId={hostTaskId}
+          snapshot={snapshot}
+          onCollapse={() => mobile ? setMobileOpen(false) : setSidebarCollapsed(value => !value)}
+          onQuickChat={() => quickChat()}
+          onSearch={openSearch}
+          onPage={selectPage}
+          onConversation={selectConversation}
+          onHostTask={id => { setHostTaskId(id); setPage('conversation'); setMobileOpen(false); }}
+          onSettings={() => openSettings()}
+        />
+        <section className="main-shell" inert={mobile && mobileOpen} aria-hidden={mobile && mobileOpen ? true : undefined}>
+          <header className="topbar">
+            <div className="topbar-left"><Button size="icon" className="mobile-menu" aria-label="打开导航" onClick={() => { mobileReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setMobileOpen(true); }}><Menu size={17} /></Button><span className="topbar-context">{hostTask ? '主机任务 · 只读' : page === 'home' ? '安全协作工作台' : page === 'conversation' ? '本地会话预览' : page === 'agents' ? 'Agent' : page === 'workflow' ? '运行模式' : '审批与成果'}</span></div>
+            <div className="topbar-actions">
+              <Button className="host-connection" onClick={() => openSettings('诊断')}><span className={`connection-dot ${snapshot.connection === 'connected' ? 'connected' : ''}`} />{snapshot.connection === 'connected' ? '主机已连接 · 只读' : '主机未连接'}</Button>
+              {chatVisible && <Hint text={preferences.inspector ? '收起右侧工作区' : '展开右侧工作区'}><Button size="icon" className={preferences.inspector ? 'panel-active' : ''} aria-label={preferences.inspector ? '收起右侧工作区' : '展开右侧工作区'} aria-expanded={preferences.inspector} onClick={() => updatePreferences({ inspector: !preferences.inspector })}><PanelRightOpen size={16} /></Button></Hint>}
+            </div>
+          </header>
+          {error && <div className="bridge-error" role="status">{error}</div>}
+          <div className="main-body">
+            <main id="main" className="main" tabIndex={-1}>
+              {hostTask ? <HostConversation task={hostTask} snapshot={snapshot} /> : chatVisible ? (
+                <Chat
+                  key={current.id}
+                  conversation={current}
+                  home={page === 'home'}
+                  onUpdate={updateCurrent}
+                  onConfig={updateConfig}
+                  onSend={sendMessage}
+                  canSend={!!adapter && canOperate(agents.find(agent => agent.id === (current.config.agent === 'Claude Code' ? 'claude' : current.config.agent === 'Codex' ? 'codex' : 'opencode')), current.config.agent)}
+                  busy={busy}
+                  onStop={stopTask}
+                  onOpenWorkflow={() => selectPage('workflow')}
+                  onOpenArtifact={() => openWorkspace('artifacts')}
+                />
+              ) : <ManagementPage page={page} snapshot={snapshot} config={current.config} onConfig={updateConfig} onUseAgent={quickChat} actionReason={unavailable} />}
+            </main>
+            {chatVisible && preferences.inspector && <WorkspacePanel current={current} task={hostTask} snapshot={snapshot} tab={workspaceTab} onTab={setWorkspaceTab} />}
+          </div>
+        </section>
+      </div>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} tab={settingsTab} onTab={setSettingsTab} snapshot={snapshot} preferences={preferences} onPreferences={updatePreferences} returnFocus={settingsReturnFocus.current} actionReason={unavailable} connection={connection} onConnection={setConnection} onConnect={connect} connectionError={connectionError} />
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} query={query} onQuery={setQuery} conversations={conversations} snapshot={snapshot} onConversation={selectConversation} onHostTask={id => { setHostTaskId(id); setPage('conversation'); }} returnFocus={searchReturnFocus.current} />
+    </div>
+  );
 }
