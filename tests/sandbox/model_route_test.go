@@ -31,9 +31,13 @@ func TestRealModelRoute(t *testing.T) {
 	defer proxy.Close()
 	server := httptest.NewServer(proxy)
 	defer server.Close()
-	for _, route := range []string{"/v1/messages", "/v1/chat/completions"} {
+	for _, route := range []string{"/v1/messages", "/v1/chat/completions", "/v1/responses"} {
 		t.Run(route, func(t *testing.T) {
-			body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 32, "messages": []map[string]string{{"role": "user", "content": "Reply exactly PULSAR_ROUTE_OK and nothing else."}}})
+			payload := map[string]any{"model": model, "max_tokens": 32, "messages": []map[string]string{{"role": "user", "content": "Reply exactly PULSAR_ROUTE_OK and nothing else."}}}
+			if route == "/v1/responses" {
+				payload = map[string]any{"model": model, "input": "Reply exactly PULSAR_ROUTE_OK and nothing else.", "max_output_tokens": 32}
+			}
+			body, _ := json.Marshal(payload)
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 			defer cancel()
 			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+route, bytes.NewReader(body))
