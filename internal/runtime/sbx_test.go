@@ -91,7 +91,7 @@ func (f *fakeRun) Run(ctx context.Context, args ...string) ([]byte, error) {
 		if !nameRE.MatchString(f.name) || len(f.name) != 39 {
 			f.t.Fatal("not unpredictable name", f.name)
 		}
-		want := []string{"create", "--name", f.name, "--cpus", "2", "--memory", "2g", "--skills", "off", "--template", SbxTemplate, "--pull", "missing", "--", "shell"}
+		want := []string{"create", "--name", f.name, "--cpus", "2", "--memory", "2g", "--skills", "off", "--template", SbxTemplate, "--pull", "missing", "shell"}
 		if !reflect.DeepEqual(args, want) {
 			f.t.Fatalf("create flags=%q", args)
 		}

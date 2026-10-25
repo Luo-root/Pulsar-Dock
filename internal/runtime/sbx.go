@@ -483,7 +483,7 @@ func (b *SbxBackend) Create(ctx context.Context, s EnvironmentSpec) (Environment
 			return Environment{}, berr(ErrDenied, "create", "random name collision")
 		}
 	}
-	_, createErr := b.run(ctx, "create", "--name", name, "--cpus", strconv.Itoa(s.CPUs), "--memory", s.Memory, "--skills", "off", "--template", SbxTemplate, "--pull", "missing", "--", s.Agent)
+	_, createErr := b.run(ctx, "create", "--name", name, "--cpus", strconv.Itoa(s.CPUs), "--memory", s.Memory, "--skills", "off", "--template", SbxTemplate, "--pull", "missing", s.Agent)
 	// stdout is human-readable. Only a new UUID with our unpredictable name in
 	// the authoritative listing identifies a candidate for ownership/cleanup.
 	c, cancel := cleanupContext()
