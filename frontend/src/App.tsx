@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Menu, PanelRightOpen } from 'lucide-react';
 import { disconnectedBridge, disconnectedSnapshot, parseSnapshot, type HostBridge, type Snapshot } from './bridge';
-import { canOperate, DesktopHttpAdapter, type AgentInfo, type ConnectionConfig } from './httpAdapter';
+import { canOperate, DesktopHttpAdapter, type AgentInfo, type ConnectionConfig, type DesktopClient } from './httpAdapter';
 import { Chat } from './components/Chat';
 import { HostConversation, ManagementPage } from './components/Pages';
 import { SearchDialog } from './components/SearchDialog';
@@ -38,7 +38,7 @@ function useMediaQuery(query: string) {
   return matches;
 }
 
-export default function App({ bridge = disconnectedBridge }: { bridge?: HostBridge }) {
+export default function App({ bridge = disconnectedBridge, adapterFactory = config => new DesktopHttpAdapter(config) }: { bridge?: HostBridge; adapterFactory?: (config: ConnectionConfig) => DesktopClient }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(disconnectedSnapshot);
   const [error, setError] = useState('');
   const [page, setPage] = useState<Page>('home');
@@ -54,11 +54,11 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('通用');
   const [searchOpen, setSearchOpen] = useState(false);
   const [connection, setConnection] = useState<ConnectionConfig>({ baseURL: 'http://127.0.0.1:8787', token: '' });
-  const [adapter, setAdapter] = useState<DesktopHttpAdapter | null>(null);
+  const [adapter, setAdapter] = useState<DesktopClient | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [connectionError, setConnectionError] = useState('');
   const [busy, setBusy] = useState(false);
-  const activeTask = useRef<{ generation: number; conversationId: string; adapter: DesktopHttpAdapter; agentID: string; rootID: string; taskID: string } | null>(null);
+  const activeTask = useRef<{ generation: number; conversationId: string; adapter: DesktopClient; agentID: string; rootID: string; taskID: string } | null>(null);
   const operationGeneration = useRef(0);
   const connectionGeneration = useRef(0);
   const mobile = useMediaQuery('(max-width: 760px)');
@@ -197,14 +197,15 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
     const selectedConversation = current;
     const agentID = agents.find(agent => canOperate(agent, selectedConversation.config.agent))?.id;
     if (adapter && agentID) {
+      const operationAdapter = adapter;
       const generation = ++operationGeneration.current;
       setBusy(true); setConnectionError('');
       void (async () => {
         try {
-          const created = await adapter.createTask(agentID, clean, crypto.randomUUID());
+          const created = await operationAdapter.createTask(agentID, clean, crypto.randomUUID());
           const rootID = created.rootId;
-          activeTask.current = { generation, conversationId, adapter, agentID, rootID, taskID: created.id };
-          const result = await adapter.execute(agentID, rootID, created.id);
+          activeTask.current = { generation, conversationId, adapter: operationAdapter, agentID, rootID, taskID: created.id };
+          const result = await operationAdapter.execute(agentID, rootID, created.id);
           if (operationGeneration.current !== generation) return;
           setConversations(items => items.map(item => item.id === conversationId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }, { id: `result-${crypto.randomUUID()}`, role: 'assistant', content: [{ type: 'text', text: result.output }] }], notice: result.commandCompleted ? 'Agent 已完成命令。' : 'Agent 已返回输出，但命令未报告完成。' } : item));
         } catch (error) { if (operationGeneration.current === generation) setConnectionError(error instanceof Error ? error.message : 'Agent 请求失败。'); }
@@ -220,9 +221,9 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   const connect = () => {
     const generation = ++connectionGeneration.current;
     try {
-      const next = new DesktopHttpAdapter(connection);
-      setAdapter(next); setConnectionError('');
-      void next.listAgents().then(directory => { if (connectionGeneration.current === generation) setAgents(directory); }).catch(error => { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '读取 Agent 失败。'); } });
+      const next = adapterFactory(connection);
+      setAdapter(null); setAgents([]); setConnectionError('');
+      void next.listAgents().then(directory => { if (connectionGeneration.current === generation) { setAdapter(next); setAgents(directory); } }).catch(error => { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '读取 Agent 失败。'); } });
     } catch (error) { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '连接配置无效。'); } }
   };
   const openSettings = (tab: SettingsTab = '通用') => {

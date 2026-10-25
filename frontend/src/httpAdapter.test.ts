@@ -7,7 +7,7 @@ const agent = { id: 'opencode', installed: true, cliVerified: true, modelVerifie
 describe('DesktopHttpAdapter', () => {
   it('uses real DTO fields, bearer auth, exact routes, and independent server stop', async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
-    const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => { const url = String(input); calls.push({ url, init }); if (url.endsWith('/agents')) return new Response(JSON.stringify([agent]), { status: 200 }); if (url.endsWith('/execute')) return new Response(JSON.stringify({ task, commandCompleted: false, output: '' }), { status: 200 }); if (url.endsWith('/tasks')) return new Response(JSON.stringify(task), { status: 200 }); return new Response(null, { status: 204 }); });
+    const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => { const url = String(input); calls.push({ url, init }); if (url.endsWith('/agents')) return new Response(JSON.stringify([agent]), { status: 200 }); if (url.endsWith('/execute')) return new Response(JSON.stringify({ task, commandCompleted: false }), { status: 200 }); if (url.endsWith('/tasks')) return new Response(JSON.stringify(task), { status: 200 }); return new Response(null, { status: 204 }); });
     const adapter = new DesktopHttpAdapter({ baseURL: 'http://127.0.0.1:8787/', token: 'synthetic-session-token' }, fetcher);
     expect(await adapter.listAgents()).toEqual([agent]);
     expect(await adapter.createTask('opencode', 'goal', 'idem')).toEqual(task);

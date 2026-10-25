@@ -49,9 +49,16 @@ function parseTask(value: unknown): TaskResult {
 }
 function parseAgents(value: unknown): AgentInfo[] { if (!Array.isArray(value) || value.length > maxAgents) throw new DesktopHttpError('桌面服务返回的 Agent 目录格式无效。'); return value.map(parseAgent); }
 function parseTaskResponse(value: unknown): TaskResult { return parseTask(value); }
-function parseExecute(value: unknown): ExecuteResult { if (!record(value) || typeof value.commandCompleted !== 'boolean' || typeof value.output !== 'string' || value.output.length > maxOutput) throw new DesktopHttpError('桌面服务返回的执行结果格式无效。'); return { task: parseTask(value.task), commandCompleted: value.commandCompleted, output: value.output }; }
+function parseExecute(value: unknown): ExecuteResult { if (!record(value) || typeof value.commandCompleted !== 'boolean' || (value.output !== undefined && typeof value.output !== 'string') || (typeof value.output === 'string' && value.output.length > maxOutput)) throw new DesktopHttpError('桌面服务返回的执行结果格式无效。'); return { task: parseTask(value.task), commandCompleted: value.commandCompleted, output: value.output ?? '' }; }
 
-export class DesktopHttpAdapter {
+export interface DesktopClient {
+  listAgents(): Promise<AgentInfo[]>;
+  createTask(agentID: string, goal: string, idempotencyKey: string): Promise<TaskResult>;
+  execute(agentID: string, rootID: string, taskID: string): Promise<ExecuteResult>;
+  stop(agentID: string, rootID: string): Promise<void>;
+}
+
+export class DesktopHttpAdapter implements DesktopClient {
   constructor(private readonly config: ConnectionConfig, private readonly fetcher: typeof fetch = fetch) {
     if (!validBaseURL(config.baseURL)) throw new DesktopHttpError('只允许连接本机根路径 HTTP 服务。');
     if (!config.token.trim()) throw new DesktopHttpError('连接令牌不能为空。');
