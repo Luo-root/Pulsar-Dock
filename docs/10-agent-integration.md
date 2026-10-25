@@ -12,6 +12,8 @@
 | Codex | shell guest 无二进制；codex 类型 guest 创建时因 `policy: denied: unexpected allow rule` 被拒绝，随后 `sbx ls --json` 为 `[]` | 保留 ErrUnsupported，不放宽网络规则，不回退宿主 |
 | DSH | shell guest 无二进制；本地 DSH 插件状态 requires_install | 暂跳过；需要独立 guest provisioning 与固定依赖；没有运行验证 |
 
+扩展常见 CLI 入口清单后，真实 shell inventory PASS 97.38 秒：`claude` 为 2.1.306；`codex`、`copilot`、`cursor-agent`、`devin`、`docker-agent`、`droid`、`gemini`、`kiro-cli`、`opencode`、`dsh` 均未在 agent 用户 PATH 找到。这是入口清单探针，不是全文件系统安装审计；不证明各自默认 Agent 专用镜像不可用。sbx create 的受支持类型不等于此固定镜像预装清单。
+
 首轮真实 shell inventory PASS 77.09 秒。测试 PASS 表示清单探针执行完毕，ABSENT 明确表示缺失，不表示该 Agent 支持。Codex 专用 guest 探针 FAIL 41.63 秒；保留该失败，不以全量 Go 单测替代。
 
 sbx 的只读状态查询仍出现 `docker hub refresh lock held by another process` 警告，准备可靠性未解决（#32）。

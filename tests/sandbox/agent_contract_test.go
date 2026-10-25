@@ -73,7 +73,7 @@ func TestAgentGuestContracts(t *testing.T) {
 	if inspected.ID != env.ID || inspected.Name != env.Name || inspected.Agent != guestAgent {
 		t.Fatal("guest identity mismatch")
 	}
-	for _, binary := range []string{"claude", "codex", "dsh"} {
+	for _, binary := range []string{"claude", "codex", "copilot", "cursor-agent", "devin", "docker-agent", "droid", "gemini", "kiro-cli", "opencode", "dsh"} {
 		t.Run(binary, func(t *testing.T) {
 			probe, done := context.WithTimeout(ctx, 30*time.Second)
 			defer done()
