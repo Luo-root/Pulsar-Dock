@@ -18,18 +18,19 @@ import (
 )
 
 const (
-	ClaudeID        = "claude"
-	ClaudeVersion   = agentadapter.ClaudeVersion
-	ClaudeCLIPath   = "/home/agent/.local/bin/claude"
-	ClaudeConfig    = agentadapter.GuestMCPConfigPath
-	ClaudeModel     = "auto/gpt-6.1-sol"
-	OpenCodeID      = "opencode"
-	OpenCodeVersion = "1.19.4"
-	OpenCodeCLIPath = "/opt/pulsar-agents/opencode"
-	OpenCodeConfig  = "/etc/pulsar-agents/opencode/config.json"
-	OpenCodeModel   = "pulsar/deepseek-flash"
-	GateHost        = "127.0.0.1"
-	GatePort        = 3425
+	ClaudeID         = "claude"
+	ClaudeVersion    = agentadapter.ClaudeVersion
+	ClaudeCLIPath    = "/home/agent/.local/bin/claude"
+	ClaudeConfig     = agentadapter.GuestMCPConfigPath
+	ClaudeModel      = "auto/gpt-6.1-sol"
+	OpenCodeID       = "opencode"
+	OpenCodeVersion  = "1.19.4"
+	OpenCodeCLIPath  = "/opt/pulsar-agents/opencode"
+	OpenCodeConfig   = "/etc/pulsar-agents/opencode/config.json"
+	OpenCodeLauncher = "/opt/pulsar-agents/opencode-launcher"
+	OpenCodeModel    = "pulsar/deepseek-flash"
+	GateHost         = "127.0.0.1"
+	GatePort         = 3425
 
 	claudeLauncher = "/opt/pulsar-agents/claude-launcher"
 	claudeToken    = "/etc/pulsar-agents/claude/token"
@@ -329,8 +330,9 @@ func (v *OpenCodeVerifier) prepare(ctx context.Context, env runtime.Environment)
 	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: []string{"mkdir", "-p", "--", "/tmp/pulsar-dock", "/etc/pulsar-agents/opencode", "/opt/pulsar-agents"}}); err != nil {
 		return errors.Join(ErrUnsupported, err)
 	}
-	config := fmt.Sprintf("{\"$schema\":\"https://opencode.ai/config.json\",\"model\":%q,\"provider\":{\"pulsar\":{\"npm\":\"@ai-sdk/openai-compatible\",\"options\":{\"baseURL\":\"http://host.docker.internal:%s/v1\",\"apiKey\":\"$(cat %s)\"},\"models\":{%q:{}}}}}\n", OpenCodeModel, portText, opencodeToken, OpenCodeModel)
-	files := map[string][]byte{"config": []byte(config), "token": []byte(proxy.GuestToken() + "\n")}
+	config := fmt.Sprintf("{\"$schema\":\"https://opencode.ai/config.json\",\"model\":%q,\"provider\":{\"pulsar\":{\"npm\":\"@ai-sdk/openai-compatible\",\"options\":{\"baseURL\":\"http://host.docker.internal:%s/v1\",\"apiKey\":\"{env:OPENCODE_GATE_TOKEN}\"},\"models\":{%q:{}}}}}\n", OpenCodeModel, portText, OpenCodeModel)
+	launcher := []byte("#!/bin/sh\nset -eu\nexport OPENCODE_GATE_TOKEN=$(cat " + opencodeToken + ")\nexec " + OpenCodeCLIPath + " \\\"$@\\\"\n")
+	files := map[string][]byte{"config": []byte(config), "token": []byte(proxy.GuestToken() + "\n"), "launcher": launcher}
 	for name, data := range files {
 		tmp, e := os.CreateTemp(v.Staging, "opencode-")
 		if e != nil {
@@ -347,13 +349,16 @@ func (v *OpenCodeVerifier) prepare(ctx context.Context, env runtime.Environment)
 		if name == "token" {
 			guest = "/tmp/pulsar-dock/opencode-token"
 		}
+		if name == "launcher" {
+			guest = "/tmp/pulsar-dock/opencode-launcher"
+		}
 		if _, e = v.Backend.CopyIn(ctx, env, path, guest); e != nil {
 			_ = os.Remove(path)
 			return errors.Join(ErrUnsupported, e)
 		}
 		_ = os.Remove(path)
 	}
-	commands := [][]string{{"mv", "--", "/tmp/pulsar-dock/opencode-config", OpenCodeConfig}, {"mv", "--", "/tmp/pulsar-dock/opencode-token", opencodeToken}, {"chown", "root:root", "--", OpenCodeConfig, opencodeToken}, {"chmod", "0644", "--", OpenCodeConfig}, {"chmod", "0600", "--", opencodeToken}}
+	commands := [][]string{{"mv", "--", "/tmp/pulsar-dock/opencode-config", OpenCodeConfig}, {"mv", "--", "/tmp/pulsar-dock/opencode-token", opencodeToken}, {"mv", "--", "/tmp/pulsar-dock/opencode-launcher", OpenCodeLauncher}, {"chown", "root:root", "--", OpenCodeConfig, opencodeToken, OpenCodeLauncher}, {"chmod", "0644", "--", OpenCodeConfig}, {"chmod", "0600", "--", opencodeToken}, {"chmod", "0555", "--", OpenCodeLauncher}}
 	for _, command := range commands {
 		if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: command}); err != nil {
 			return errors.Join(ErrUnsupported, err)
