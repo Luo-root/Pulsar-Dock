@@ -111,6 +111,32 @@ func TestProvisionPositiveFixedSteps(t *testing.T) {
 		t.Fatalf("first command was not staging mkdir: %+v", f.commands)
 	}
 }
+func TestProvisionRejectsOtherAgentBeforeIO(t *testing.T) {
+	f := &fakeBackend{}
+	if err := Provision(context.Background(), f, runtime.Environment{ID: "e", Backend: "fake", Agent: "opencode"}, "missing", t.TempDir(), "codex"); err == nil {
+		t.Fatal("accepted unrelated agent environment")
+	}
+	if len(f.commands) != 0 {
+		t.Fatal("performed guest IO before rejecting binding")
+	}
+}
+
+func TestVerifierRejectsVersionSubstrings(t *testing.T) {
+	env := runtime.Environment{ID: "owned", Backend: "fake", Agent: "shell"}
+	f := &fakeBackend{inspect: env}
+	v, _ := NewGuestVerifier(f)
+	for _, output := range []string{"codex 0.164.0-beta", "codex 0.164.01", "prefix codex 0.164.0", "codex 0.164.0\n\n"} {
+		f.versionOutput = output
+		if err := v.Verify(context.Background(), env, "codex"); err == nil {
+			t.Errorf("accepted %q", output)
+		}
+	}
+	f.versionOutput = "codex-cli 0.164.0\n"
+	if err := v.Verify(context.Background(), env, "codex"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProvisionRejectsBadReceipt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pkg")

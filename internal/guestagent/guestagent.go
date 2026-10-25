@@ -82,7 +82,7 @@ type CopyBackend interface{ runtime.RuntimeBackend }
 
 func Provision(ctx context.Context, backend runtime.RuntimeBackend, env runtime.Environment, archivePath, stagingDir, agent string) error {
 	p, ok := Lookup(agent)
-	if !ok || backend == nil || env.ID == "" || env.Backend != backend.Name() || filepath.Clean(stagingDir) != stagingDir || !filepath.IsAbs(stagingDir) {
+	if !ok || backend == nil || env.ID == "" || (env.Agent != "shell" && env.Agent != agent) || env.Backend != backend.Name() || filepath.Clean(stagingDir) != stagingDir || !filepath.IsAbs(stagingDir) {
 		return ErrRejected
 	}
 	if info, err := os.Stat(stagingDir); err != nil || !info.IsDir() {
@@ -168,15 +168,20 @@ func NewGuestVerifier(b runtime.RuntimeBackend) (GuestVerifier, error) {
 }
 func (v GuestVerifier) Verify(ctx context.Context, env runtime.Environment, agent string) error {
 	p, ok := Lookup(agent)
-	if !ok || env.ID == "" || env.Backend != v.backend.Name() || env.Agent != agent {
+	if !ok || env.ID == "" || env.Backend != v.backend.Name() || (env.Agent != "shell" && env.Agent != agent) {
 		return ErrRejected
 	}
 	got, err := v.backend.Inspect(ctx, env)
-	if err != nil || got.ID != env.ID || got.Agent != agent {
+	if err != nil || got.ID != env.ID || got.Name != env.Name || got.Backend != env.Backend || got.Agent != env.Agent {
 		return ErrRejected
 	}
 	out, err := v.backend.Exec(ctx, env, runtime.ExecRequest{User: "agent", Command: append([]string{p.GuestBinaryPath}, p.VersionCommand...)})
-	if err != nil || len(out) > 1024 || !strings.Contains(out, p.Version) {
+	line := strings.TrimSuffix(strings.TrimSuffix(out, "\n"), "\r")
+	expected := p.Version
+	if agent == "codex" {
+		expected = "codex-cli " + p.Version
+	}
+	if err != nil || (line != expected && !(agent == "codex" && line == "codex "+p.Version)) {
 		return ErrRejected
 	}
 	return nil
