@@ -58,7 +58,9 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [connectionError, setConnectionError] = useState('');
   const [busy, setBusy] = useState(false);
-  const activeTask = useRef<{ agentID: string; rootID: string; taskID: string } | null>(null);
+  const activeTask = useRef<{ generation: number; conversationId: string; adapter: DesktopHttpAdapter; agentID: string; rootID: string; taskID: string } | null>(null);
+  const operationGeneration = useRef(0);
+  const connectionGeneration = useRef(0);
   const mobile = useMediaQuery('(max-width: 760px)');
   const counter = useRef(1);
   const settingsReturnFocus = useRef<HTMLElement | null>(null);
@@ -188,35 +190,40 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
 
   const sendMessage = (text: string) => {
     const clean = text.trim();
-    if (!clean) return;
+    if (!clean || operationGeneration.current !== 0) return;
     const firstLine = clean.split('\n')[0];
     const title = Array.from(firstLine).slice(0, 24).join('');
-    const agentID = agents.find(agent => canOperate(agent, current.config.agent))?.id;
+    const conversationId = selectedId;
+    const selectedConversation = current;
+    const agentID = agents.find(agent => canOperate(agent, selectedConversation.config.agent))?.id;
     if (adapter && agentID) {
+      const generation = ++operationGeneration.current;
       setBusy(true); setConnectionError('');
       void (async () => {
         try {
           const created = await adapter.createTask(agentID, clean, crypto.randomUUID());
           const rootID = created.rootId;
-          activeTask.current = { agentID, rootID, taskID: created.id };
+          activeTask.current = { generation, conversationId, adapter, agentID, rootID, taskID: created.id };
           const result = await adapter.execute(agentID, rootID, created.id);
-          setConversations(items => items.map(item => item.id === selectedId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }, { id: `result-${crypto.randomUUID()}`, role: 'assistant', content: [{ type: 'text', text: result.output }] }], notice: result.commandCompleted ? 'Agent 已完成命令。' : 'Agent 已返回输出，但命令未报告完成。' } : item));
-        } catch (error) { setConnectionError(error instanceof Error ? error.message : 'Agent 请求失败。'); }
-        finally { activeTask.current = null; setBusy(false); }
+          if (operationGeneration.current !== generation) return;
+          setConversations(items => items.map(item => item.id === conversationId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }, { id: `result-${crypto.randomUUID()}`, role: 'assistant', content: [{ type: 'text', text: result.output }] }], notice: result.commandCompleted ? 'Agent 已完成命令。' : 'Agent 已返回输出，但命令未报告完成。' } : item));
+        } catch (error) { if (operationGeneration.current === generation) setConnectionError(error instanceof Error ? error.message : 'Agent 请求失败。'); }
+        finally { if (operationGeneration.current === generation) { activeTask.current = null; operationGeneration.current = 0; setBusy(false); } }
       })();
     } else {
       setConversations(items => items.map(item => item.id === selectedId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }], notice: '已保留在本地预览，未调用模型、未创建任务，也未启动 Agent。' } : item));
     }
     setPage('conversation');
   };
-  const stopTask = () => { const task = activeTask.current; if (!task || !adapter) return; void adapter.stop(task.agentID, task.rootID).catch(error => setConnectionError(error instanceof Error ? error.message : '停止任务失败。')); };
+  const stopTask = () => { const task = activeTask.current; if (!task) return; void task.adapter.stop(task.agentID, task.rootID).catch(error => { if (operationGeneration.current === task.generation) setConnectionError(error instanceof Error ? error.message : '停止任务失败.'); }); };
 
   const connect = () => {
+    const generation = ++connectionGeneration.current;
     try {
       const next = new DesktopHttpAdapter(connection);
       setAdapter(next); setConnectionError('');
-      void next.listAgents().then(setAgents).catch(error => { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '读取 Agent 失败。'); });
-    } catch (error) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '连接配置无效。'); }
+      void next.listAgents().then(directory => { if (connectionGeneration.current === generation) setAgents(directory); }).catch(error => { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '读取 Agent 失败。'); } });
+    } catch (error) { if (connectionGeneration.current === generation) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '连接配置无效。'); } }
   };
   const openSettings = (tab: SettingsTab = '通用') => {
     settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;

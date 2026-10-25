@@ -49,7 +49,7 @@ function parseTask(value: unknown): TaskResult {
 }
 function parseAgents(value: unknown): AgentInfo[] { if (!Array.isArray(value) || value.length > maxAgents) throw new DesktopHttpError('桌面服务返回的 Agent 目录格式无效。'); return value.map(parseAgent); }
 function parseTaskResponse(value: unknown): TaskResult { return parseTask(value); }
-function parseExecute(value: unknown): ExecuteResult { if (!record(value) || typeof value.commandCompleted !== 'boolean' || !boundedText(value.output, maxOutput)) throw new DesktopHttpError('桌面服务返回的执行结果格式无效。'); return { task: parseTask(value.task), commandCompleted: value.commandCompleted, output: value.output }; }
+function parseExecute(value: unknown): ExecuteResult { if (!record(value) || typeof value.commandCompleted !== 'boolean' || typeof value.output !== 'string' || value.output.length > maxOutput) throw new DesktopHttpError('桌面服务返回的执行结果格式无效。'); return { task: parseTask(value.task), commandCompleted: value.commandCompleted, output: value.output }; }
 
 export class DesktopHttpAdapter {
   constructor(private readonly config: ConnectionConfig, private readonly fetcher: typeof fetch = fetch) {
