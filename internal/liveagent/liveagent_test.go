@@ -2,6 +2,7 @@ package liveagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Luo-root/pulsar-dock/internal/agentadapter"
@@ -70,8 +71,37 @@ func TestClaudePlannerRejectsInjectedGoalAndPath(t *testing.T) {
 	}
 }
 
+func TestOpenCodePlannerFixedCommandAndGoal(t *testing.T) {
+	p, _, err := Components(OpenCodeID, fakeBackend{}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.Plan(agentadapter.Request{Goal: "Reply exactly PULSAR_OPENCODE_OK", MCPConfigPath: OpenCodeConfig, MaxBudgetUSD: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.User != "agent" || len(r.Command) != 8 || r.Command[0] != OpenCodeCLIPath || r.Command[1] != "run" || r.Command[2] != "--config" || r.Command[3] != OpenCodeConfig || r.Command[4] != "--model" || r.Command[5] != OpenCodeModel || r.Command[6] != "--" || r.Command[7] != "Reply exactly PULSAR_OPENCODE_OK" {
+		t.Fatalf("unexpected request: %#v", r)
+	}
+	for _, arg := range r.Command {
+		if arg == "--unsafe" || arg == "--allow-all" || strings.Contains(arg, "token") {
+			t.Fatal("unsafe flag or credential injected")
+		}
+	}
+}
+
+func TestOpenCodePlannerRejectsInjectedGoalAndPath(t *testing.T) {
+	p, _, _ := Components(OpenCodeID, fakeBackend{}, t.TempDir())
+	if _, err := p.Plan(agentadapter.Request{Goal: "x\n--unsafe", MCPConfigPath: OpenCodeConfig, MaxBudgetUSD: 1}); err == nil {
+		t.Fatal("newline goal accepted")
+	}
+	if _, err := p.Plan(agentadapter.Request{Goal: "x", MCPConfigPath: ClaudeConfig, MaxBudgetUSD: 1}); err == nil {
+		t.Fatal("wrong config accepted")
+	}
+}
+
 func TestUnsupportedAgentsFailClosed(t *testing.T) {
-	for _, id := range []string{"codex", "opencode"} {
+	for _, id := range []string{"codex"} {
 		p, v, err := Components(id, fakeBackend{}, t.TempDir())
 		if err != nil {
 			t.Fatal(err)

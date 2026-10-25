@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,6 +33,7 @@ type Config struct {
 	UpstreamToken    string
 	GuestToken       string
 	Model            string
+	UpstreamModel    string
 	MaxBodyBytes     int64
 	MaxResponseBytes int64
 	Timeout          time.Duration
@@ -45,6 +47,7 @@ type Proxy struct {
 	guestToken    string
 	guestHash     [32]byte
 	model         string
+	upstreamModel string
 	maxBody       int64
 	maxResponse   int64
 	timeout       time.Duration
@@ -95,7 +98,7 @@ func New(cfg Config) (*Proxy, error) {
 	transport.MaxResponseHeaderBytes = 32 << 10
 	return &Proxy{
 		origin: u.Scheme + "://" + u.Host, upstreamToken: cfg.UpstreamToken,
-		guestToken: cfg.GuestToken, guestHash: sha256.Sum256([]byte(cfg.GuestToken)), model: cfg.Model,
+		guestToken: cfg.GuestToken, guestHash: sha256.Sum256([]byte(cfg.GuestToken)), model: cfg.Model, upstreamModel: cfg.UpstreamModel,
 		maxBody: cfg.MaxBodyBytes, maxResponse: cfg.MaxResponseBytes, timeout: cfg.Timeout,
 		client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}, nil
@@ -176,6 +179,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil || json.Unmarshal(fields["model"], &model) != nil || model != p.model {
 		reject(w, http.StatusBadRequest, "model_not_allowed")
 		return
+	}
+	if p.upstreamModel != "" {
+		fields["model"] = json.RawMessage(strconv.Quote(p.upstreamModel))
 	}
 	body, err = json.Marshal(fields)
 	if err != nil {

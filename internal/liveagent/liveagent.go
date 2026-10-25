@@ -18,16 +18,22 @@ import (
 )
 
 const (
-	ClaudeID      = "claude"
-	ClaudeVersion = agentadapter.ClaudeVersion
-	ClaudeCLIPath = "/home/agent/.local/bin/claude"
-	ClaudeConfig  = agentadapter.GuestMCPConfigPath
-	ClaudeModel   = "minimax-code/MiniMax-M3.1-Flash"
-	GateHost      = "127.0.0.1"
-	GatePort      = 3425
+	ClaudeID        = "claude"
+	ClaudeVersion   = agentadapter.ClaudeVersion
+	ClaudeCLIPath   = "/home/agent/.local/bin/claude"
+	ClaudeConfig    = agentadapter.GuestMCPConfigPath
+	ClaudeModel     = "auto/gpt-6.1-sol"
+	OpenCodeID      = "opencode"
+	OpenCodeVersion = "1.19.4"
+	OpenCodeCLIPath = "/opt/pulsar-agents/opencode"
+	OpenCodeConfig  = "/etc/pulsar-agents/opencode/config.json"
+	OpenCodeModel   = "pulsar/deepseek-flash"
+	GateHost        = "127.0.0.1"
+	GatePort        = 3425
 
 	claudeLauncher = "/opt/pulsar-agents/claude-launcher"
 	claudeToken    = "/etc/pulsar-agents/claude/token"
+	opencodeToken  = "/etc/pulsar-agents/opencode/token"
 )
 
 var ErrUnsupported = errors.New("agent is not ready for live execution")
@@ -52,7 +58,7 @@ func Definitions() []Definition {
 	return []Definition{
 		{ID: ClaudeID, DisplayName: "Claude", Version: ClaudeVersion, CLIPath: ClaudeCLIPath, ConfigPath: ClaudeConfig, Model: ClaudeModel, Installed: true, CLIVerified: true, ModelVerified: false},
 		{ID: "codex", DisplayName: "Codex", Version: "0.164.0"},
-		{ID: "opencode", DisplayName: "OpenCode", Version: "1.19.4"},
+		{ID: OpenCodeID, DisplayName: "OpenCode", Version: OpenCodeVersion, CLIPath: OpenCodeCLIPath, ConfigPath: OpenCodeConfig, Model: OpenCodeModel, Installed: true, CLIVerified: true, ModelVerified: false},
 	}
 }
 
@@ -66,7 +72,7 @@ func (ClaudePlanner) Plan(r agentadapter.Request) (runtime.ExecRequest, error) {
 		claudeLauncher, "--bare", "--restricted", "--print", "--strict-mcp-config", "--mcp-config", ClaudeConfig,
 		"--permission-mode", "dontAsk", "--permission-prompts", "none", "--tools", "", "--allowedTools", "mcp__dock__*",
 		"--disable-slash-commands", "--setting-sources", "", "--no-chrome", "--no-session-persistence",
-		"--output-format", "stream-json", "--verbose", "--max-budget-usd", "1", "--model", ClaudeModel, "--", r.Goal,
+		"--output-format", "stream-json", "--verbose", "--max-budget-usd", "1", "--", r.Goal,
 	}}, nil
 }
 
@@ -124,7 +130,7 @@ func (v *ClaudeVerifier) prepare(ctx context.Context, env runtime.Environment) e
 	if err := os.MkdirAll(v.Staging, 0700); err != nil {
 		return ErrUnsupported
 	}
-	proxy, err := modelproxy.New(modelproxy.Config{UpstreamURL: fmt.Sprintf("http://%s:%d", GateHost, GatePort), UpstreamToken: "magpie", Model: ClaudeModel})
+	proxy, err := modelproxy.New(modelproxy.Config{UpstreamURL: fmt.Sprintf("http://%s:%d", GateHost, GatePort), UpstreamToken: "magpie", Model: ClaudeModel, UpstreamModel: "auto/gpt-6.1-sol"})
 	if err != nil {
 		return errors.Join(ErrUnsupported, err)
 	}
@@ -160,7 +166,7 @@ func (v *ClaudeVerifier) prepare(ctx context.Context, env runtime.Environment) e
 	files := map[string][]byte{
 		"mcp.json": []byte("{\"mcpServers\":{}}\n"),
 		"token":    []byte(token + "\n"),
-		"launcher": []byte("#!/bin/sh\nset -eu\nexport ANTHROPIC_BASE_URL=http://host.docker.internal:" + portText + "\nexport ANTHROPIC_API_KEY=$(cat " + claudeToken + ")\nexport ANTHROPIC_AUTH_TOKEN=\"$ANTHROPIC_API_KEY\"\nexec " + ClaudeCLIPath + " \"$@\"\n"),
+		"launcher": []byte("#!/bin/sh\nset -eu\nexport ANTHROPIC_BASE_URL=http://host.docker.internal:" + portText + "\nexport ANTHROPIC_API_KEY=$(cat " + claudeToken + ")\nexec " + ClaudeCLIPath + " \"$@\"\n"),
 	}
 	for name, data := range files {
 		tmp, e := os.CreateTemp(v.Staging, "claude-")
@@ -230,6 +236,151 @@ func (v *ClaudeVerifier) Close() error {
 	return err
 }
 
+// OpenCodePlanner exposes only the fixed non-interactive runner contract. The
+// goal is the sole caller-controlled value; config, model and credentials are
+// provisioned by OpenCodeVerifier and never accepted from the request.
+type OpenCodePlanner struct{}
+
+func (OpenCodePlanner) Plan(r agentadapter.Request) (runtime.ExecRequest, error) {
+	if r.MCPConfigPath != OpenCodeConfig || r.MaxBudgetUSD <= 0 || r.MaxBudgetUSD >= 100000 ||
+		strings.TrimSpace(r.Goal) == "" || len(r.Goal) > agentadapter.MaxGoalBytes ||
+		strings.ContainsAny(r.Goal, "\x00\r\n") {
+		return runtime.ExecRequest{}, errors.New("invalid OpenCode execution request")
+	}
+	return runtime.ExecRequest{User: "agent", Command: []string{
+		OpenCodeCLIPath, "run", "--config", OpenCodeConfig, "--model", OpenCodeModel, "--", r.Goal,
+	}}, nil
+}
+
+// OpenCodeVerifier provisions one fixed OpenAI-compatible config into an owned
+// guest. The token is delivered only through a root-owned file and is never in
+// argv or logs.
+type OpenCodeVerifier struct {
+	Backend   runtime.RuntimeBackend
+	Staging   string
+	mu        sync.Mutex
+	instances map[string]*modelInstance
+}
+
+func (v *OpenCodeVerifier) Verify(ctx context.Context, env runtime.Environment) error {
+	if v == nil || v.Backend == nil || env.ID == "" || env.Backend != v.Backend.Name() || env.Agent != "shell" || filepath.Clean(v.Staging) != v.Staging || !filepath.IsAbs(v.Staging) {
+		return ErrUnsupported
+	}
+	if err := v.prepare(ctx, env); err != nil {
+		return err
+	}
+	got, err := v.Backend.Inspect(ctx, env)
+	if err != nil || got.ID != env.ID || got.Name != env.Name || got.State != "running" {
+		return errors.Join(ErrUnsupported, err)
+	}
+	path, err := v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "agent", Command: []string{"command", "-v", OpenCodeCLIPath}})
+	if err != nil || strings.TrimSpace(path) != OpenCodeCLIPath {
+		return errors.Join(ErrUnsupported, err)
+	}
+	version, err := v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "agent", Command: []string{OpenCodeCLIPath, "--version"}})
+	if err != nil || strings.TrimSpace(version) != OpenCodeVersion {
+		return errors.Join(ErrUnsupported, err)
+	}
+	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "agent", Command: []string{OpenCodeCLIPath, "--help"}}); err != nil {
+		return errors.Join(ErrUnsupported, err)
+	}
+	return nil
+}
+
+func (v *OpenCodeVerifier) prepare(ctx context.Context, env runtime.Environment) error {
+	v.mu.Lock()
+	if v.instances == nil {
+		v.instances = map[string]*modelInstance{}
+	}
+	if _, ok := v.instances[env.ID]; ok {
+		v.mu.Unlock()
+		return nil
+	}
+	v.mu.Unlock()
+	if err := os.MkdirAll(v.Staging, 0700); err != nil {
+		return ErrUnsupported
+	}
+	proxy, err := modelproxy.New(modelproxy.Config{UpstreamURL: fmt.Sprintf("http://%s:%d", GateHost, GatePort), UpstreamToken: "magpie", Model: OpenCodeModel, UpstreamModel: "deepseek/deepseek-flash"})
+	if err != nil {
+		return errors.Join(ErrUnsupported, err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		proxy.Close()
+		return errors.Join(ErrUnsupported, err)
+	}
+	server := &http.Server{Handler: proxy}
+	go func() { _ = server.Serve(ln) }()
+	_, portText, _ := net.SplitHostPort(ln.Addr().String())
+	var port int
+	_, _ = fmt.Sscan(portText, &port)
+	if err = v.Backend.SetNetworkPolicy(ctx, env, []runtime.NetworkRule{{Host: "host.docker.internal", Port: port, Action: "allow"}}); err != nil {
+		_ = server.Close()
+		proxy.Close()
+		return errors.Join(ErrUnsupported, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = server.Close()
+			proxy.Close()
+		}
+	}()
+	if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: []string{"mkdir", "-p", "--", "/tmp/pulsar-dock", "/etc/pulsar-agents/opencode", "/opt/pulsar-agents"}}); err != nil {
+		return errors.Join(ErrUnsupported, err)
+	}
+	config := fmt.Sprintf("{\"$schema\":\"https://opencode.ai/config.json\",\"model\":%q,\"provider\":{\"pulsar\":{\"npm\":\"@ai-sdk/openai-compatible\",\"options\":{\"baseURL\":\"http://host.docker.internal:%s/v1\",\"apiKey\":\"$(cat %s)\"},\"models\":{%q:{}}}}}\n", OpenCodeModel, portText, opencodeToken, OpenCodeModel)
+	files := map[string][]byte{"config": []byte(config), "token": []byte(proxy.GuestToken() + "\n")}
+	for name, data := range files {
+		tmp, e := os.CreateTemp(v.Staging, "opencode-")
+		if e != nil {
+			return ErrUnsupported
+		}
+		path := tmp.Name()
+		_, e = tmp.Write(data)
+		_ = tmp.Close()
+		if e != nil {
+			_ = os.Remove(path)
+			return ErrUnsupported
+		}
+		guest := "/tmp/pulsar-dock/opencode-config"
+		if name == "token" {
+			guest = "/tmp/pulsar-dock/opencode-token"
+		}
+		if _, e = v.Backend.CopyIn(ctx, env, path, guest); e != nil {
+			_ = os.Remove(path)
+			return errors.Join(ErrUnsupported, e)
+		}
+		_ = os.Remove(path)
+	}
+	commands := [][]string{{"mv", "--", "/tmp/pulsar-dock/opencode-config", OpenCodeConfig}, {"mv", "--", "/tmp/pulsar-dock/opencode-token", opencodeToken}, {"chown", "root:root", "--", OpenCodeConfig, opencodeToken}, {"chmod", "0644", "--", OpenCodeConfig}, {"chmod", "0600", "--", opencodeToken}}
+	for _, command := range commands {
+		if _, err = v.Backend.Exec(ctx, env, runtime.ExecRequest{User: "root", Command: command}); err != nil {
+			return errors.Join(ErrUnsupported, err)
+		}
+	}
+	v.mu.Lock()
+	v.instances[env.ID] = &modelInstance{server: server, listener: ln, proxy: proxy}
+	v.mu.Unlock()
+	committed = true
+	return nil
+}
+
+func (v *OpenCodeVerifier) Close() error {
+	if v == nil {
+		return nil
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var err error
+	for id, in := range v.instances {
+		err = errors.Join(err, in.server.Close())
+		in.proxy.Close()
+		delete(v.instances, id)
+	}
+	return err
+}
+
 type UnsupportedVerifier struct{}
 
 func (UnsupportedVerifier) Verify(context.Context, runtime.Environment) error { return ErrUnsupported }
@@ -251,8 +402,13 @@ func Components(agent string, backend runtime.RuntimeBackend, staging ...string)
 			return nil, nil, ErrUnsupported
 		}
 		return ClaudePlanner{}, &ClaudeVerifier{Backend: backend, Staging: staging[0]}, nil
-	case "codex", "opencode":
+	case "codex":
 		return unsupportedPlanner{}, UnsupportedVerifier{}, nil
+	case OpenCodeID:
+		if backend == nil || len(staging) != 1 {
+			return nil, nil, ErrUnsupported
+		}
+		return OpenCodePlanner{}, &OpenCodeVerifier{Backend: backend, Staging: staging[0]}, nil
 	default:
 		return nil, nil, ErrUnsupported
 	}
