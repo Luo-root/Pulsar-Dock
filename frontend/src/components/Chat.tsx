@@ -84,12 +84,15 @@ const modeLabels: { value: RunMode; label: string }[] = [
   { value: 'auto', label: 'AUTO' },
 ];
 
-function Composer({ conversation, home, onUpdate, onConfig, onOpenWorkflow }: {
+function Composer({ conversation, home, onUpdate, onConfig, onOpenWorkflow, canSend, busy, onStop }: {
   conversation: Conversation;
   home: boolean;
   onUpdate: (patch: Partial<Conversation>) => void;
   onConfig: (patch: Partial<SessionConfig>) => void;
   onOpenWorkflow: () => void;
+  canSend: boolean;
+  busy: boolean;
+  onStop: () => void;
 }) {
   const modeRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const config = conversation.config;
@@ -131,9 +134,9 @@ function Composer({ conversation, home, onUpdate, onConfig, onOpenWorkflow }: {
             <Choice label="模型" value={config.model} options={['未连接模型', '示例模型（不调用）']} onChange={model => onConfig({ model })} />
             <Choice label="权限" value={config.approval} options={['标准模式', '逐项确认', '仅讨论']} onChange={approval => onConfig({ approval })} />
             <Hint text="只生成本地预览消息，不调用模型或 Agent">
-              <ComposerPrimitive.Send asChild>
-                <Button variant="primary" className="send-button" aria-label="发送到本地预览"><Send size={14} /><span>发送</span></Button>
-              </ComposerPrimitive.Send>
+              {busy ? <Button variant="outline" className="send-button" aria-label="停止任务" onClick={onStop}><Send size={14} /><span>停止</span></Button> : <ComposerPrimitive.Send asChild>
+                <Button variant="primary" className="send-button" aria-label={canSend ? '发送到 Agent' : '发送到本地预览'} disabled={!canSend && !conversation.draft.trim()}><Send size={14} /><span>发送</span></Button>
+              </ComposerPrimitive.Send>}
             </Hint>
           </div>
         </div>
@@ -183,7 +186,7 @@ function Composer({ conversation, home, onUpdate, onConfig, onOpenWorkflow }: {
   );
 }
 
-export function Chat({ conversation, home, onUpdate, onConfig, onSend, onOpenWorkflow, onOpenArtifact }: {
+export function Chat({ conversation, home, onUpdate, onConfig, onSend, onOpenWorkflow, onOpenArtifact, canSend, busy, onStop }: {
   conversation: Conversation;
   home: boolean;
   onUpdate: (patch: Partial<Conversation>) => void;
@@ -191,6 +194,9 @@ export function Chat({ conversation, home, onUpdate, onConfig, onSend, onOpenWor
   onSend: (text: string) => void;
   onOpenWorkflow: () => void;
   onOpenArtifact: () => void;
+  canSend: boolean;
+  busy: boolean;
+  onStop: () => void;
 }) {
   const runtime = useExternalStoreRuntime({
     messages: conversation.messages,
@@ -203,7 +209,7 @@ export function Chat({ conversation, home, onUpdate, onConfig, onSend, onOpenWor
   });
   useEffect(() => { runtime.thread.composer.setText(conversation.draft); }, [runtime, conversation.draft]);
 
-  const composer = <Composer conversation={conversation} home={home} onUpdate={onUpdate} onConfig={onConfig} onOpenWorkflow={onOpenWorkflow} />;
+  const composer = <Composer conversation={conversation} home={home} onUpdate={onUpdate} onConfig={onConfig} onOpenWorkflow={onOpenWorkflow} canSend={canSend} busy={busy} onStop={onStop} />;
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>

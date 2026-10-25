@@ -1,9 +1,9 @@
-export type BrandName = 'Claude Code' | 'Codex' | 'DSH' | 'ACP' | 'MCP' | 'Magpie';
+export type BrandName = 'Claude Code' | 'Codex' | 'OpenCode' | 'ACP' | 'MCP' | 'Magpie';
 
 const sources: Record<Exclude<BrandName, 'Magpie'>, string> = {
   'Claude Code': '/logos/claude.svg',
   Codex: '/logos/codex.svg',
-  DSH: '/logos/deepseek.png',
+  OpenCode: '/logos/deepseek.png',
   ACP: '/logos/acp.png',
   MCP: '/logos/mcp.svg',
 };

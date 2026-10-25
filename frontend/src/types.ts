@@ -1,7 +1,7 @@
 import type { ThreadMessageLike } from '@assistant-ui/react';
 
 export type Page = 'home' | 'conversation' | 'agents' | 'workflow' | 'artifacts';
-export type AgentKind = 'Claude Code' | 'Codex' | 'DSH';
+export type AgentKind = 'Claude Code' | 'Codex' | 'OpenCode';
 export type RunMode = 'direct' | 'workflow' | 'auto';
 export type WorkspaceTab = 'resources' | 'artifacts' | 'permissions' | 'workflow';
 

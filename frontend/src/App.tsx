@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Menu, PanelRightOpen } from 'lucide-react';
 import { disconnectedBridge, disconnectedSnapshot, parseSnapshot, type HostBridge, type Snapshot } from './bridge';
+import { canOperate, DesktopHttpAdapter, type AgentInfo, type ConnectionConfig } from './httpAdapter';
 import { Chat } from './components/Chat';
 import { HostConversation, ManagementPage } from './components/Pages';
 import { SearchDialog } from './components/SearchDialog';
@@ -52,6 +53,12 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('通用');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [connection, setConnection] = useState<ConnectionConfig>({ baseURL: 'http://127.0.0.1:8787', token: '' });
+  const [adapter, setAdapter] = useState<DesktopHttpAdapter | null>(null);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [connectionError, setConnectionError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const activeTask = useRef<{ agentID: string; rootID: string; taskID: string } | null>(null);
   const mobile = useMediaQuery('(max-width: 760px)');
   const counter = useRef(1);
   const settingsReturnFocus = useRef<HTMLElement | null>(null);
@@ -184,19 +191,33 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
     if (!clean) return;
     const firstLine = clean.split('\n')[0];
     const title = Array.from(firstLine).slice(0, 24).join('');
-    setConversations(items => items.map(item => {
-      if (item.id !== selectedId) return item;
-      return {
-        ...item,
-        title: item.messages.length ? item.title : title,
-        draft: '',
-        messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }],
-        notice: '已保留在本地预览，未调用模型、未创建任务，也未启动 Agent。',
-      };
-    }));
+    const agentID = agents.find(agent => canOperate(agent, current.config.agent))?.agentId;
+    if (adapter && agentID) {
+      setBusy(true); setConnectionError('');
+      void (async () => {
+        try {
+          const created = await adapter.createTask(agentID, clean, crypto.randomUUID());
+          const rootID = created.parentId ?? created.id;
+          activeTask.current = { agentID, rootID, taskID: created.id };
+          const result = await adapter.execute(agentID, rootID, created.id);
+          setConversations(items => items.map(item => item.id === selectedId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }, { id: `result-${crypto.randomUUID()}`, role: 'assistant', content: [{ type: 'text', text: result.output }] }], notice: result.commandCompleted ? 'Agent 已完成命令。' : 'Agent 已返回输出，但命令未报告完成。' } : item));
+        } catch (error) { setConnectionError(error instanceof Error ? error.message : 'Agent 请求失败。'); }
+        finally { activeTask.current = null; setBusy(false); }
+      })();
+    } else {
+      setConversations(items => items.map(item => item.id === selectedId ? { ...item, title: item.messages.length ? item.title : title, draft: '', messages: [...item.messages, { id: `local-${crypto.randomUUID()}`, role: 'user', content: [{ type: 'text', text: clean }] }], notice: '已保留在本地预览，未调用模型、未创建任务，也未启动 Agent。' } : item));
+    }
     setPage('conversation');
   };
+  const stopTask = () => { const task = activeTask.current; if (!task || !adapter) return; void adapter.stop(task.agentID, task.rootID, task.taskID).catch(error => setConnectionError(error instanceof Error ? error.message : '停止任务失败。')); };
 
+  const connect = () => {
+    try {
+      const next = new DesktopHttpAdapter(connection);
+      setAdapter(next); setConnectionError('');
+      void next.listAgents().then(setAgents).catch(error => { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '读取 Agent 失败。'); });
+    } catch (error) { setAdapter(null); setAgents([]); setConnectionError(error instanceof Error ? error.message : '连接配置无效。'); }
+  };
   const openSettings = (tab: SettingsTab = '通用') => {
     settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSettingsTab(tab);
@@ -268,6 +289,9 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
                   onUpdate={updateCurrent}
                   onConfig={updateConfig}
                   onSend={sendMessage}
+                  canSend={!!adapter && canOperate(agents.find(agent => agent.agentId === (current.config.agent === 'Claude Code' ? 'claude' : current.config.agent === 'Codex' ? 'codex' : 'opencode')), current.config.agent)}
+                  busy={busy}
+                  onStop={stopTask}
                   onOpenWorkflow={() => selectPage('workflow')}
                   onOpenArtifact={() => openWorkspace('artifacts')}
                 />
@@ -277,7 +301,7 @@ export default function App({ bridge = disconnectedBridge }: { bridge?: HostBrid
           </div>
         </section>
       </div>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} tab={settingsTab} onTab={setSettingsTab} snapshot={snapshot} preferences={preferences} onPreferences={updatePreferences} returnFocus={settingsReturnFocus.current} actionReason={unavailable} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} tab={settingsTab} onTab={setSettingsTab} snapshot={snapshot} preferences={preferences} onPreferences={updatePreferences} returnFocus={settingsReturnFocus.current} actionReason={unavailable} connection={connection} onConnection={setConnection} onConnect={connect} connectionError={connectionError} />
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} query={query} onQuery={setQuery} conversations={conversations} snapshot={snapshot} onConversation={selectConversation} onHostTask={id => { setHostTaskId(id); setPage('conversation'); }} returnFocus={searchReturnFocus.current} />
     </div>
   );
